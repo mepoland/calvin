@@ -17,6 +17,10 @@ body {
   justify-content: center;
   text-align: center;
   padding: 2rem;
+  background-image: url("calvins-drawing.jpg");
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
 }
 
 .hero h1 {
