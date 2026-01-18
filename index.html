@@ -19,8 +19,8 @@
         <div class="game-header">
           <h2>Slice-N-Dice 3000</h2>
           <p>
-            Guide the butter knife with the arrow keys or WASD. Slice butter,
-            jelly, and apples for points, but avoid the toasters and the ground.
+            Guide the butter knife with WASD. Slice butter, jelly, and apples
+            for points, but avoid the toasters and the ground.
           </p>
         </div>
         <div class="game-shell">
@@ -144,7 +144,7 @@
           knife.vx *= 0.9;
         }
 
-        if (keys.has("ArrowUp") || keys.has("w")) {
+        if (keys.has("arrowup") || keys.has("w")) {
           knife.vy -= lift;
         }
         if (keys.has("ArrowDown") || keys.has("s")) {
