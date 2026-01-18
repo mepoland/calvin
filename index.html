@@ -134,11 +134,11 @@
         }
 
         const acceleration = 0.018 * delta;
-        const lift = 0.028 * delta;
+        const lift = 0.022 * delta;
         const maxSpeed = 3.2;
-        if (keys.has("arrowleft") || keys.has("a")) {
+        if (keys.has("ArrowLeft") || keys.has("a")) {
           knife.vx -= acceleration;
-        } else if (keys.has("arrowright") || keys.has("d")) {
+        } else if (keys.has("ArrowRight") || keys.has("d")) {
           knife.vx += acceleration;
         } else {
           knife.vx *= 0.9;
@@ -147,13 +147,13 @@
         if (keys.has("arrowup") || keys.has("w")) {
           knife.vy -= lift;
         }
-        if (keys.has("arrowdown") || keys.has("s")) {
+        if (keys.has("ArrowDown") || keys.has("s")) {
           knife.vy += lift * 0.45;
         }
 
         knife.vx = Math.max(-maxSpeed, Math.min(maxSpeed, knife.vx));
         knife.vy = Math.max(-maxSpeed * 1.3, Math.min(maxSpeed * 1.3, knife.vy));
-        knife.vy += 0.09 * delta;
+        knife.vy += 0.14 * delta;
         knife.x = Math.max(40, Math.min(canvas.width - 80, knife.x + knife.vx));
         knife.y += knife.vy;
 
