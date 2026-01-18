@@ -23,6 +23,74 @@ body {
   background-repeat: no-repeat;
 }
 
+.hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2rem;
+  max-width: 900px;
+  width: min(100%, 960px);
+  padding: 2.5rem clamp(1rem, 4vw, 3rem);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 20px 45px rgba(0, 0, 0, 0.18);
+}
+
 .hero h1 {
   font-size: clamp(2rem, 5vw, 3.5rem);
+}
+
+.game-section {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.game-header h2 {
+  font-size: clamp(1.6rem, 3vw, 2.4rem);
+  margin-bottom: 0.5rem;
+}
+
+.game-header p {
+  font-family: "Trebuchet MS", sans-serif;
+  font-size: 1rem;
+  color: #333;
+  line-height: 1.5;
+}
+
+.game-shell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+#game-canvas {
+  width: min(100%, 720px);
+  max-width: 720px;
+  height: auto;
+  border: 6px solid #1f1f1f;
+  border-radius: 16px;
+  background: #7cc5ff;
+  image-rendering: pixelated;
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.2);
+}
+
+.game-stats {
+  width: min(100%, 720px);
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  border-radius: 999px;
+  background: #1f1f1f;
+  color: #fff;
+  font-size: 0.95rem;
+}
+
+@media (max-width: 600px) {
+  .game-stats {
+    flex-direction: column;
+  }
 }
