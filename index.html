@@ -15,6 +15,248 @@
   <body>
     <main class="hero">
       <h1>Welcome to Calvin's Website!</h1>
+      <section class="game-section" aria-label="Slice-N-Dice 3000">
+        <div class="game-header">
+          <h2>Slice-N-Dice 3000</h2>
+          <p>
+            Guide the butter knife with the arrow keys or WASD. Slice butter,
+            jelly, and apples for points, but avoid the toasters and the ground.
+          </p>
+        </div>
+        <div class="game-shell">
+          <canvas id="game-canvas" width="720" height="420"></canvas>
+          <div class="game-stats" aria-live="polite">
+            <span id="score">Score: 0</span>
+            <span id="status">Keep slicing!</span>
+          </div>
+        </div>
+      </section>
     </main>
+    <script>
+      const canvas = document.getElementById("game-canvas");
+      const ctx = canvas.getContext("2d");
+      const scoreLabel = document.getElementById("score");
+      const statusLabel = document.getElementById("status");
+
+      ctx.imageSmoothingEnabled = false;
+
+      const groundHeight = 70;
+      const knife = {
+        x: 120,
+        y: 120,
+        width: 46,
+        height: 12,
+        vx: 0,
+        vy: 0,
+      };
+
+      const keys = new Set();
+      const items = [];
+      let score = 0;
+      let scrollOffset = 0;
+      let lastSpawn = 0;
+      let lastTime = performance.now();
+
+      const itemTypes = [
+        {
+          name: "butter",
+          color: "#f8e16c",
+          points: 10,
+          width: 34,
+          height: 22,
+        },
+        {
+          name: "jelly",
+          color: "#c34b7a",
+          points: 12,
+          width: 28,
+          height: 28,
+        },
+        {
+          name: "apple",
+          color: "#e24b3b",
+          points: 15,
+          width: 26,
+          height: 26,
+        },
+        {
+          name: "toaster",
+          color: "#7d7b7f",
+          points: -20,
+          width: 36,
+          height: 26,
+        },
+      ];
+
+      const spawnItem = () => {
+        const type = itemTypes[Math.floor(Math.random() * itemTypes.length)];
+        const minY = 60;
+        const maxY = canvas.height - groundHeight - type.height - 20;
+        items.push({
+          ...type,
+          x: canvas.width + 40,
+          y: Math.random() * (maxY - minY) + minY,
+          vx: -2.6 - Math.random() * 1.8,
+        });
+      };
+
+      const resetKnife = () => {
+        knife.x = 120;
+        knife.y = 120;
+        knife.vx = 0;
+        knife.vy = 0;
+      };
+
+      const updateScore = (delta, message) => {
+        score += delta;
+        scoreLabel.textContent = `Score: ${score}`;
+        if (message) {
+          statusLabel.textContent = message;
+        }
+      };
+
+      const checkCollision = (a, b) => {
+        return (
+          a.x < b.x + b.width &&
+          a.x + a.width > b.x &&
+          a.y < b.y + b.height &&
+          a.y + a.height > b.y
+        );
+      };
+
+      const update = (timestamp) => {
+        const delta = Math.min(32, timestamp - lastTime);
+        lastTime = timestamp;
+        lastSpawn += delta;
+        if (lastSpawn > 900) {
+          spawnItem();
+          lastSpawn = 0;
+        }
+
+        const speed = 0.26 * delta;
+        const lift = 0.35 * delta;
+        if (keys.has("ArrowLeft") || keys.has("a")) {
+          knife.vx = -speed;
+        } else if (keys.has("ArrowRight") || keys.has("d")) {
+          knife.vx = speed;
+        } else {
+          knife.vx *= 0.85;
+        }
+
+        if (keys.has("ArrowUp") || keys.has("w")) {
+          knife.vy -= lift;
+        }
+        if (keys.has("ArrowDown") || keys.has("s")) {
+          knife.vy += lift * 0.6;
+        }
+
+        knife.vy += 0.18 * delta;
+        knife.x = Math.max(40, Math.min(canvas.width - 80, knife.x + knife.vx));
+        knife.y += knife.vy;
+
+        const groundTop = canvas.height - groundHeight;
+        if (knife.y + knife.height > groundTop) {
+          knife.y = groundTop - knife.height;
+          knife.vy = -4;
+          updateScore(-10, "Ouch! The ground bites.");
+        }
+        if (knife.y < 20) {
+          knife.y = 20;
+          knife.vy = 1.2;
+        }
+
+        items.forEach((item) => {
+          item.x += item.vx;
+        });
+
+        for (let i = items.length - 1; i >= 0; i -= 1) {
+          const item = items[i];
+          if (item.x + item.width < -40) {
+            items.splice(i, 1);
+            continue;
+          }
+          if (checkCollision(knife, item)) {
+            if (item.name === "toaster") {
+              updateScore(item.points, "ZAP! Toasted.");
+            } else {
+              updateScore(item.points, `Sliced ${item.name}!`);
+            }
+            items.splice(i, 1);
+          }
+        }
+
+        scrollOffset = (scrollOffset + 1.2) % 24;
+      };
+
+      const drawPixelRect = (x, y, width, height, color) => {
+        ctx.fillStyle = color;
+        ctx.fillRect(Math.round(x), Math.round(y), width, height);
+      };
+
+      const drawBackground = () => {
+        drawPixelRect(0, 0, canvas.width, canvas.height, "#7cc5ff");
+
+        for (let i = 0; i < 6; i += 1) {
+          const cloudX = (i * 140 + scrollOffset * 0.3) % (canvas.width + 120) - 60;
+          const cloudY = 40 + (i % 3) * 28;
+          drawPixelRect(cloudX, cloudY, 60, 18, "#e6f5ff");
+          drawPixelRect(cloudX + 18, cloudY - 10, 36, 12, "#e6f5ff");
+        }
+
+        const groundTop = canvas.height - groundHeight;
+        drawPixelRect(0, groundTop, canvas.width, 26, "#4faa4f");
+        drawPixelRect(0, groundTop + 26, canvas.width, groundHeight - 26, "#7d4f2c");
+
+        for (let x = -24; x < canvas.width + 24; x += 24) {
+          drawPixelRect(x - scrollOffset, groundTop + 4, 12, 8, "#5ccc58");
+          drawPixelRect(x - scrollOffset, groundTop + 32, 16, 6, "#8c5a35");
+        }
+      };
+
+      const drawKnife = () => {
+        drawPixelRect(knife.x, knife.y, knife.width, knife.height, "#f2efe9");
+        drawPixelRect(knife.x + knife.width - 16, knife.y - 6, 16, 6, "#d4b48c");
+        drawPixelRect(knife.x + knife.width - 10, knife.y + 2, 6, 6, "#ba8d5b");
+      };
+
+      const drawItems = () => {
+        items.forEach((item) => {
+          drawPixelRect(item.x, item.y, item.width, item.height, item.color);
+          if (item.name === "jelly") {
+            drawPixelRect(item.x + 6, item.y + 8, 16, 12, "#f39ac3");
+          }
+          if (item.name === "apple") {
+            drawPixelRect(item.x + 8, item.y - 6, 8, 6, "#5a9c4b");
+          }
+          if (item.name === "toaster") {
+            drawPixelRect(item.x + 6, item.y + 6, 10, 12, "#a8a4a9");
+            drawPixelRect(item.x + 20, item.y + 6, 10, 12, "#a8a4a9");
+          }
+        });
+      };
+
+      const draw = () => {
+        drawBackground();
+        drawItems();
+        drawKnife();
+      };
+
+      const loop = (timestamp) => {
+        update(timestamp);
+        draw();
+        requestAnimationFrame(loop);
+      };
+
+      window.addEventListener("keydown", (event) => {
+        keys.add(event.key.toLowerCase());
+      });
+      window.addEventListener("keyup", (event) => {
+        keys.delete(event.key.toLowerCase());
+      });
+      window.addEventListener("blur", () => keys.clear());
+
+      resetKnife();
+      requestAnimationFrame(loop);
+    </script>
   </body>
 </html>
