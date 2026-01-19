@@ -40,6 +40,13 @@ body {
   font-size: clamp(2rem, 5vw, 3.5rem);
 }
 
+.hero-intro {
+  font-family: "Trebuchet MS", sans-serif;
+  font-size: 1rem;
+  color: #333;
+  line-height: 1.5;
+}
+
 .game-section {
   width: 100%;
   display: flex;
@@ -92,6 +99,107 @@ body {
   background: #1f1f1f;
   color: #fff;
   font-size: 0.95rem;
+}
+
+.knife-launch {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  border: 3px solid #1f1f1f;
+  background: radial-gradient(circle at 30% 30%, #ffffff, #d9d9d9 60%, #bfbfbf);
+  box-shadow: 0 16px 28px rgba(0, 0, 0, 0.2);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  transition: transform 9s ease-in-out, opacity 0.3s ease;
+  z-index: 20;
+}
+
+.knife-launch.is-hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.knife-launch__blade {
+  width: 34px;
+  height: 8px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #f7f6f2, #cfcfcf);
+  display: block;
+  position: relative;
+}
+
+.knife-launch__blade::after {
+  content: "";
+  position: absolute;
+  right: -4px;
+  top: -3px;
+  width: 10px;
+  height: 14px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #f7f6f2, #bdbdbd);
+}
+
+.knife-launch__handle {
+  width: 16px;
+  height: 12px;
+  border-radius: 4px;
+  background: #b68454;
+  margin-top: 6px;
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.4);
+}
+
+.game-modal {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+  z-index: 30;
+}
+
+.game-modal.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.game-modal__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.game-modal__content {
+  position: relative;
+  background: rgba(255, 255, 255, 0.95);
+  border-radius: 24px;
+  padding: 2.5rem clamp(1rem, 4vw, 3rem);
+  box-shadow: 0 30px 60px rgba(0, 0, 0, 0.35);
+  max-width: min(960px, 92vw);
+  z-index: 1;
+}
+
+.game-modal__close {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: none;
+  background: #1f1f1f;
+  color: #fff;
+  font-size: 1.4rem;
+  cursor: pointer;
 }
 
 @media (max-width: 600px) {
