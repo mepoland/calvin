@@ -15,28 +15,59 @@
   <body>
     <main class="hero">
       <h1>Welcome to Calvin's Website!</h1>
-      <section class="game-section" aria-label="Slice-N-Dice 3000">
-        <div class="game-header">
-          <h2>Slice-N-Dice 3000</h2>
-          <p>
-            Click or press and hold to lift the butter knife. Slice butter,
-            jelly, and apples for points, but avoid the toasters and the ground.
-          </p>
-        </div>
-        <div class="game-shell">
-          <canvas id="game-canvas" width="720" height="420"></canvas>
-          <div class="game-stats" aria-live="polite">
-            <span id="score">Score: 0</span>
-            <span id="status">Keep slicing!</span>
-          </div>
-        </div>
-      </section>
+      <p class="hero-intro">
+        Look for the drifting knife icon to launch Slice-N-Dice 3000.
+      </p>
+      <button
+        class="knife-launch"
+        id="knife-launch"
+        aria-haspopup="dialog"
+        aria-controls="game-modal"
+        aria-label="Open Slice-N-Dice 3000"
+        type="button"
+      >
+        <span class="knife-launch__blade"></span>
+        <span class="knife-launch__handle"></span>
+      </button>
     </main>
+
+    <div class="game-modal" id="game-modal" role="dialog" aria-modal="true" aria-hidden="true">
+      <div class="game-modal__backdrop" data-close-modal></div>
+      <div class="game-modal__content">
+        <button
+          class="game-modal__close"
+          type="button"
+          aria-label="Close Slice-N-Dice 3000"
+          data-close-modal
+        >
+          ×
+        </button>
+        <section class="game-section" aria-label="Slice-N-Dice 3000">
+          <div class="game-header">
+            <h2>Slice-N-Dice 3000</h2>
+            <p>
+              Click or press and hold to lift the butter knife. Slice butter,
+              jelly, and apples for points, but avoid the toasters and the ground.
+            </p>
+          </div>
+          <div class="game-shell">
+            <canvas id="game-canvas" width="720" height="420"></canvas>
+            <div class="game-stats" aria-live="polite">
+              <span id="score">Score: 0</span>
+              <span id="status">Keep slicing!</span>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
     <script>
       const canvas = document.getElementById("game-canvas");
       const ctx = canvas.getContext("2d");
       const scoreLabel = document.getElementById("score");
       const statusLabel = document.getElementById("status");
+      const modal = document.getElementById("game-modal");
+      const launchButton = document.getElementById("knife-launch");
+      const closeTargets = modal.querySelectorAll("[data-close-modal]");
 
       ctx.imageSmoothingEnabled = false;
 
@@ -56,6 +87,8 @@
       let lastSpawn = 0;
       let lastTime = performance.now();
       let isLifting = false;
+      let isGameActive = false;
+      let animationFrameId = null;
 
       const itemTypes = [
         {
@@ -102,9 +135,20 @@
 
       const resetKnife = () => {
         knife.x = 120;
-        knife.y = 120;
+        knife.y = 40;
         knife.vx = 0;
         knife.vy = 0;
+      };
+
+      const resetGameState = () => {
+        score = 0;
+        scoreLabel.textContent = "Score: 0";
+        statusLabel.textContent = "Keep slicing!";
+        items.length = 0;
+        scrollOffset = 0;
+        lastSpawn = 0;
+        lastTime = performance.now();
+        resetKnife();
       };
 
       const updateScore = (delta, message) => {
@@ -151,7 +195,7 @@
         if (knife.y + knife.height > groundTop) {
           knife.y = groundTop - knife.height;
           knife.vy = -4;
-          updateScore(-10, "Ouch! The ground bites.");
+          updateScore(-5, "Ouch! The ground bites.");
         }
         if (knife.y < 20) {
           knife.y = 20;
@@ -178,7 +222,7 @@
           }
         }
 
-        scrollOffset = (scrollOffset + 1.2) % 24;
+        scrollOffset += 0.3 * delta;
       };
 
       const drawPixelRect = (x, y, width, height, color) => {
@@ -260,7 +304,7 @@
       const loop = (timestamp) => {
         update(timestamp);
         draw();
-        requestAnimationFrame(loop);
+        animationFrameId = requestAnimationFrame(loop);
       };
 
       const startLift = (event) => {
@@ -271,6 +315,49 @@
         isLifting = false;
       };
 
+      const openGame = () => {
+        if (isGameActive) {
+          return;
+        }
+        isGameActive = true;
+        modal.setAttribute("aria-hidden", "false");
+        modal.classList.add("is-visible");
+        launchButton.classList.add("is-hidden");
+        resetGameState();
+        animationFrameId = requestAnimationFrame(loop);
+      };
+
+      const closeGame = () => {
+        if (!isGameActive) {
+          return;
+        }
+        isGameActive = false;
+        modal.setAttribute("aria-hidden", "true");
+        modal.classList.remove("is-visible");
+        launchButton.classList.remove("is-hidden");
+        stopLift();
+        if (animationFrameId) {
+          cancelAnimationFrame(animationFrameId);
+          animationFrameId = null;
+        }
+      };
+
+      const setLaunchPosition = () => {
+        const padding = 12;
+        const size = launchButton.offsetWidth || 72;
+        const maxX = Math.max(padding, window.innerWidth - size - padding);
+        const maxY = Math.max(padding, window.innerHeight - size - padding);
+        const x = Math.random() * maxX;
+        const y = Math.random() * maxY;
+        launchButton.style.transform = `translate(${x}px, ${y}px)`;
+      };
+
+      const driftLaunchButton = () => {
+        setLaunchPosition();
+        const delay = 7000 + Math.random() * 5000;
+        window.setTimeout(driftLaunchButton, delay);
+      };
+
       canvas.addEventListener("pointerdown", startLift);
       canvas.addEventListener("pointerup", stopLift);
       canvas.addEventListener("pointerleave", stopLift);
@@ -278,8 +365,17 @@
       canvas.addEventListener("contextmenu", (event) => event.preventDefault());
       window.addEventListener("blur", stopLift);
 
+      launchButton.addEventListener("click", openGame);
+      closeTargets.forEach((target) => target.addEventListener("click", closeGame));
+      window.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          closeGame();
+        }
+      });
+      window.addEventListener("resize", setLaunchPosition);
+
       resetKnife();
-      requestAnimationFrame(loop);
+      driftLaunchButton();
     </script>
   </body>
 </html>
