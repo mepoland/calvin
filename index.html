@@ -222,7 +222,7 @@
           }
         }
 
-        scrollOffset = (scrollOffset + 1.2) % 24;
+        scrollOffset += 0.3 * delta;
       };
 
       const drawPixelRect = (x, y, width, height, color) => {
