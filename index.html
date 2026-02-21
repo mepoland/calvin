@@ -60,7 +60,6 @@
         </section>
       </div>
     </div>
-    <p class="updated-stamp">Updated Feb 21, 2026 6:37 AM MST (23b64a1)</p>
     <script>
       const canvas = document.getElementById("game-canvas");
       const ctx = canvas.getContext("2d");
@@ -193,7 +192,7 @@
 
         knife.vx = Math.max(-maxSpeed, Math.min(maxSpeed, knife.vx));
         knife.vy = Math.max(-maxSpeed * 1.4, Math.min(maxSpeed * 1.4, knife.vy));
-        knife.vy += 0.085 * delta;
+        knife.vy += 0.06 * delta;
         knife.vy *= verticalDrag;
         knife.x = Math.max(40, Math.min(canvas.width - 80, knife.x + knife.vx));
         knife.y += knife.vy;
