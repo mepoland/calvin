@@ -88,6 +88,7 @@
       let lastSpawn = 0;
       let lastTime = performance.now();
       let isLifting = false;
+      let liftThrust = 0;
       let isGameActive = false;
       let animationFrameId = null;
 
@@ -139,6 +140,7 @@
         knife.y = 40;
         knife.vx = 0;
         knife.vy = 0;
+        liftThrust = 0;
       };
 
       const resetGameState = () => {
@@ -178,29 +180,34 @@
           lastSpawn = 0;
         }
 
-        const lift = 0.22 * delta;
+        const dt = delta / 16.67;
+        const targetLift = isLifting ? 1 : 0;
+        const liftSmoothing = 1 - Math.pow(0.82, dt);
+        const verticalDrag = Math.pow(0.95, dt);
         const maxSpeed = 3.8;
+        liftThrust += (targetLift - liftThrust) * liftSmoothing;
+        const lift = 0.12 * liftThrust * delta;
         knife.vx *= 0.92;
 
-        if (isLifting) {
-          knife.vy -= lift;
-        }
+        knife.vy -= lift;
 
         knife.vx = Math.max(-maxSpeed, Math.min(maxSpeed, knife.vx));
         knife.vy = Math.max(-maxSpeed * 1.4, Math.min(maxSpeed * 1.4, knife.vy));
-        knife.vy += 0.07 * delta;
+        knife.vy += 0.085 * delta;
+        knife.vy *= verticalDrag;
         knife.x = Math.max(40, Math.min(canvas.width - 80, knife.x + knife.vx));
         knife.y += knife.vy;
 
         const groundTop = canvas.height - groundHeight;
         if (knife.y + knife.height > groundTop) {
           knife.y = groundTop - knife.height;
-          knife.vy = -4;
+          const rebound = Math.max(1.2, Math.min(2.8, Math.abs(knife.vy) * 0.42));
+          knife.vy = -rebound;
           updateScore(-5, "Ouch! The ground bites.");
         }
         if (knife.y < 20) {
           knife.y = 20;
-          knife.vy = 1.2;
+          knife.vy = 0.8;
         }
 
         items.forEach((item) => {
