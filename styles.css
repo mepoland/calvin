@@ -52,6 +52,10 @@ body {
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .game-header h2 {
