@@ -23,6 +23,21 @@ body {
   background-repeat: no-repeat;
 }
 
+.updated-stamp {
+  position: fixed;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: "Trebuchet MS", sans-serif;
+  font-size: 0.72rem;
+  color: rgba(17, 17, 17, 0.75);
+  background: rgba(255, 255, 255, 0.7);
+  border-radius: 999px;
+  padding: 0.25rem 0.55rem;
+  z-index: 5;
+  pointer-events: none;
+}
+
 .hero {
   display: flex;
   flex-direction: column;
