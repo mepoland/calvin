@@ -13,6 +13,11 @@ from disk at `~/sites/calvin`.
 **There is no build and no deploy step** — Caddy serves the working tree, so
 saving a file here makes it live. Pushing to GitHub is for backup and history.
 
+For that to hold through Cloudflare, the zone has a **cache-bypass rule** and
+Browser Cache TTL set to "Respect Existing Headers". Without them the edge caches
+CSS and images and pins a 4-hour browser cache, so edits would take hours to show
+up. That is also why there is no cache-busting `?v=` on the stylesheet.
+
 - Preview on the LAN before pushing: <http://192.168.0.55:8081/>
 - The site is plain static files: `index.html` (the Slice-N-Dice 3000 canvas game
   is inline), `styles.css`, and the background image.
