@@ -4,32 +4,23 @@ Calvin's personal website
 Calvin's website is cool.
 Calvin's website is fun.
 
-## Build Stamp
+## Hosting
 
-This repo is configured to update the footer with the latest git commit
-timestamp (Denver time) and short SHA, and to bump the stylesheet cache-busting
-version automatically after:
+Live at <https://calvinpoland.com> (`www` redirects to the apex), served from the
+home server: a Cloudflare Tunnel to Caddy, which serves this directory straight
+from disk at `~/sites/calvin`.
 
-- commits
-- merges
-- branch checkouts
+**There is no build and no deploy step** — Caddy serves the working tree, so
+saving a file here makes it live. Pushing to GitHub is for backup and history.
 
-Hook scripts live in `.githooks/` and use `scripts/update-build-stamp.sh`.
+- Preview on the LAN before pushing: <http://192.168.0.55:8081/>
+- The site is plain static files: `index.html` (the Slice-N-Dice 3000 canvas game
+  is inline), `styles.css`, and the background image.
+- Server-side config (routing, the tunnel, the cutover notes) lives in the
+  `homeserver` repo, in `NOTES.md`.
 
-Note: `post-commit` updates the stamp after a commit is created, so
-`index.html` may show as modified immediately after committing.
-
-If hooks are not active in a fresh clone, run:
-
-```bash
-git config core.hooksPath .githooks
-```
-
-Manual refresh is still available:
-
-```bash
-scripts/update-build-stamp.sh
-```
+It was previously on GitHub Pages; that is disabled now, and the `CNAME` file and
+the git-hook build-stamp scripts that went with it have been removed.
 
 # License
 
