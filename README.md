@@ -18,7 +18,12 @@ Browser Cache TTL set to "Respect Existing Headers". Without them the edge cache
 CSS and images and pins a 4-hour browser cache, so edits would take hours to show
 up. That is also why there is no cache-busting `?v=` on the stylesheet.
 
-- Preview on the LAN before pushing: <http://192.168.0.55:8081/>
+- **There is no staging.** Editing a file here changes what the public sees, at
+  that instant — the site has no separate "draft" copy anywhere. `git push` is
+  backup, not publish, so pushing later does not delay anything going live.
+- <http://192.168.0.55:8081/> is the same directory on the LAN, useful for
+  viewing without the trip out to Cloudflare and back (and it still works if the
+  internet is down). It is *not* a preview of unpublished work.
 - The site is plain static files: `index.html` (the Slice-N-Dice 3000 canvas game
   is inline), `styles.css`, and the background image.
 - Server-side config (routing, the tunnel, the cutover notes) lives in the
