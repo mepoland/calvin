@@ -25,6 +25,10 @@
 
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
   const lerp = (a, b, t) => a + (b - a) * t;
+  const smoothstep = (a, b, x) => {
+    const t = clamp((x - a) / (b - a), 0, 1);
+    return t * t * (3 - 2 * t);
+  };
   const wrapAngle = (a) => {
     while (a > Math.PI) a -= Math.PI * 2;
     while (a < -Math.PI) a += Math.PI * 2;
@@ -90,8 +94,10 @@
     FOCAL = H / 2 / Math.tan(FOV / 2);
   };
   const NEAR = 0.4;
-  const FOG_NEAR = 45;
-  const FOG_FAR = 170;
+  // The world reaches a lot further than the fenced field does, so the fog has
+  // to open up: mountains 300 units out still need to read as mountains.
+  const FOG_NEAR = 70;
+  const FOG_FAR = 340;
   const FOG_COLOR = [168, 208, 240];
   const SKY_TOP = "#4ea3e8";
   const SKY_LOW = "#a8d0f0";
@@ -105,6 +111,11 @@
   let camRight = [1, 0, 0];
   let camUp = [0, 1, 0];
   let camFwd = [0, 0, 1];
+  // Heading flattened onto the ground, plus the horizontal half-FOV, so the
+  // terrain mesh can throw away cells behind and beside the camera before
+  // paying to transform them.
+  let camFlat = [0, 1];
+  let hfovTan = 1;
 
   const updateCamBasis = () => {
     const cp = Math.cos(cam.pitch);
@@ -114,6 +125,8 @@
     camFwd = [sy * cp, -sp, cy * cp];
     camRight = [cy, 0, -sy];
     camUp = [sy * sp, cp, cy * sp];
+    camFlat = [sy, cy];
+    hfovTan = W / 2 / FOCAL;
   };
 
   const horizonY = () => H / 2 - FOCAL * Math.tan(cam.pitch);
@@ -144,8 +157,15 @@
     color: [r, g, b].
     ref:   a point inside the solid, used to aim the normal outward. Without
            it the normal is simply aimed at the camera (flat things).
+    cull:  drop the face when its outward normal points away from the camera.
+           Sorting alone cannot draw the inside of a hole -- the near wall of a
+           trench sits closer to the camera than its floor, so it would paint
+           over the very thing you are trying to look into. Culling it is what
+           makes an open tunnel readable.
+    bias:  shaves the sort depth so a face wins against something it is
+           lying flat on top of (road markings on the ground).
   */
-  const pushPoly = (verts, color, ref) => {
+  const pushPoly = (verts, color, ref, cull, bias) => {
     const n = verts.length;
     let nx = 0;
     let ny = 0;
@@ -184,6 +204,10 @@
       nx = -nx;
       ny = -ny;
       nz = -nz;
+    }
+
+    if (cull && nx * (cam.x - mx) + ny * (cam.y - my) + nz * (cam.z - mz) <= 0) {
+      return;
     }
 
     // Camera space + near clip.
@@ -240,7 +264,12 @@
     const g = Math.round(lerp(clamp(color[1] * shade, 0, 255), FOG_COLOR[1], fog));
     const b = Math.round(lerp(clamp(color[2] * shade, 0, 255), FOG_COLOR[2], fog));
 
-    polys.push({ pts: screen, count: clipped.length, depth, fill: `rgb(${r},${g},${b})` });
+    polys.push({
+      pts: screen,
+      count: clipped.length,
+      depth: bias ? depth - bias : depth,
+      fill: `rgb(${r},${g},${b})`,
+    });
   };
 
   const flushPolys = () => {
@@ -273,7 +302,7 @@
     [4, 6, 7, 5],
   ];
 
-  const addBox = (cx, cy, cz, hx, hy, hz, color, yaw = 0, pitch = 0, roll = 0) => {
+  const addBox = (cx, cy, cz, hx, hy, hz, color, yaw = 0, pitch = 0, roll = 0, cull = false) => {
     const corners = new Array(8);
     for (let i = 0; i < 8; i += 1) {
       const p = rotate(
@@ -289,7 +318,12 @@
     const ref = [cx, cy, cz];
     for (let f = 0; f < 6; f += 1) {
       const face = BOX_FACES[f];
-      pushPoly([corners[face[0]], corners[face[1]], corners[face[2]], corners[face[3]]], color, ref);
+      pushPoly(
+        [corners[face[0]], corners[face[1]], corners[face[2]], corners[face[3]]],
+        color,
+        ref,
+        cull
+      );
     }
   };
 
@@ -356,6 +390,155 @@
     }
   };
 
+  /* -------------------------------------------------------------- terrain */
+
+  /*
+    The fenced field is a lie. It is a dead-flat disc sitting in the middle of
+    a landscape that runs out to the fog, and the only reason the field feels
+    like the whole game is that the fence stops you at 78 units.
+
+    Everything inside FLAT_R is exactly height 0, which keeps the original
+    field pixel-for-pixel what it was and gives the fence and the tunnel flat
+    ground to sit on. Past that the land eases up into rolling hills, and past
+    RELIEF_R the hills grow into mountains you can actually drive up.
+  */
+  const FLAT_R = 118;
+  const RELIEF_R = 210;
+
+  // Hand-placed launch ramps. Seeded per run in buildWorld -- the sine hills
+  // alone give gentle whoops, and a kid wants something to properly jump off.
+  let bumps = [];
+
+  const surfaceHeight = (x, z) => {
+    const r = Math.hypot(x, z);
+    let h = 0;
+    if (r > FLAT_R) {
+      const ease = smoothstep(FLAT_R, RELIEF_R, r);
+      // Rolling ground. The short-wavelength terms are tuned so that crossing
+      // a crest near top speed actually throws the truck into the air.
+      let land =
+        6.5 * Math.sin(x * 0.0295 + 0.6) * Math.cos(z * 0.0262 - 0.4) +
+        3.4 * Math.sin(x * 0.0613 - 1.2) * Math.cos(z * 0.0578 + 1.1) +
+        2.6 * Math.sin(x * 0.121 + 2.4) * Math.cos(z * 0.1131 - 2.0) +
+        1.1 * Math.sin(x * 0.241 - 0.9) * Math.cos(z * 0.2337 + 0.3) +
+        5;
+      // Mountains: two long ridges that only wake up a long way out, so the
+      // land reads as plain -> hills -> real peaks as you drive away. They
+      // have to be at full size well inside FOG_FAR, or the best thing out
+      // here would be permanently hidden in the haze.
+      const grow = smoothstep(150, 400, r);
+      if (grow > 0) {
+        const ridge =
+          0.55 * Math.sin(x * 0.0121 - 0.7) * Math.cos(z * 0.0109 + 1.9) +
+          0.45 * Math.sin(x * 0.0064 + 2.2) * Math.cos(z * 0.0071 - 0.5);
+        land += grow * 82 * Math.pow(0.5 + 0.5 * ridge, 1.6);
+      }
+      h = land * ease;
+    }
+    for (let i = 0; i < bumps.length; i += 1) {
+      const b = bumps[i];
+      const dx = x - b.x;
+      const dz = z - b.z;
+      const d2 = (dx * dx + dz * dz) / (b.r * b.r);
+      if (d2 < 1) {
+        const k = 1 - d2;
+        h += b.h * k * k;
+      }
+    }
+    return h;
+  };
+
+  /* --------------------------------------------------------------- tunnel */
+
+  /*
+    A cut in the ground running straight out from the middle of the field,
+    passing under the fence and ramping back up outside it. Most of it is an
+    open trench; only the stretch that crosses the fence line is roofed, which
+    is the bit that sells it as a tunnel. Under a painter's-algorithm renderer
+    a hole is the hard case, so the trench is drawn as culled single-sided
+    quads laid over the flat ground rather than punched through it.
+  */
+  const tunnel = {
+    angle: 0,
+    ux: 0,
+    uz: 1,
+    vx: 1,
+    vz: 0,
+    hw: 5.2, // half width
+    depth: 3.8,
+    sMouth: 50, // where the ground starts dropping
+    sRamp: 59, // floor reaches full depth
+    sLid0: 73, // roofed stretch begins
+    sLid1: 90, // ... and ends (the fence sits at 81)
+    sRise: 95, // exit ramp starts climbing
+    sEnd: 108, // back out at ground level, outside the fence
+    open: false,
+  };
+
+  const setTunnelAngle = (angle) => {
+    tunnel.angle = angle;
+    tunnel.ux = Math.sin(angle);
+    tunnel.uz = Math.cos(angle);
+    tunnel.vx = Math.cos(angle);
+    tunnel.vz = -Math.sin(angle);
+  };
+
+  // (s, t) = (distance out along the tunnel, sideways offset from its centre).
+  const tunnelS = (x, z) => x * tunnel.ux + z * tunnel.uz;
+  const tunnelT = (x, z) => x * tunnel.vx + z * tunnel.vz;
+  const tunnelXZ = (s, t) => [
+    tunnel.ux * s + tunnel.vx * t,
+    tunnel.uz * s + tunnel.vz * t,
+  ];
+
+  const trenchFloor = (s) => {
+    if (s <= tunnel.sMouth || s >= tunnel.sEnd) {
+      return 0;
+    }
+    if (s < tunnel.sRamp) {
+      return -tunnel.depth * smoothstep(tunnel.sMouth, tunnel.sRamp, s);
+    }
+    if (s <= tunnel.sRise) {
+      return -tunnel.depth;
+    }
+    return -tunnel.depth * (1 - smoothstep(tunnel.sRise, tunnel.sEnd, s));
+  };
+
+  // True while a point is over the open trench, i.e. standing on its floor
+  // rather than on the field.
+  const inTrench = (x, z) => {
+    if (!tunnel.open) {
+      return false;
+    }
+    const s = tunnelS(x, z);
+    return (
+      s > tunnel.sMouth &&
+      s < tunnel.sEnd &&
+      Math.abs(tunnelT(x, z)) < tunnel.hw
+    );
+  };
+
+  // The surface you actually drive on: the trench floor where there is one,
+  // the landscape everywhere else. The terrain mesh deliberately keeps using
+  // surfaceHeight, so the ground stays flat under the trench and the trench
+  // geometry paints over it.
+  const groundHeight = (x, z) =>
+    inTrench(x, z) ? trenchFloor(tunnelS(x, z)) : surfaceHeight(x, z);
+
+  const LID_CLEAR = 3.0; // headroom under the roofed stretch
+
+  // Underside of the roof above a point, or null out in the open.
+  const lidCeiling = (x, z) => {
+    if (!tunnel.open) {
+      return null;
+    }
+    const s = tunnelS(x, z);
+    if (s < tunnel.sLid0 || s > tunnel.sLid1) {
+      return null;
+    }
+    return Math.abs(tunnelT(x, z)) < tunnel.hw ? -tunnel.depth + LID_CLEAR : null;
+  };
+
   /* ---------------------------------------------------------------- world */
 
   const ARENA = 78;
@@ -368,6 +551,10 @@
     tree: { radius: 1.2, points: 25, label: "Tree", chunks: 8, heavy: true },
     fence: { radius: 1.7, points: 5, label: "Fence", chunks: 5, heavy: false },
     gate: { radius: 3.4, points: 50, label: "GATE", chunks: 12, heavy: true },
+    rock: { radius: 1.0, points: 10, label: "Rock", chunks: 5, heavy: false },
+    boulder: { radius: 2.0, points: 30, label: "Boulder", chunks: 9, heavy: true },
+    pine: { radius: 1.2, points: 25, label: "Pine", chunks: 8, heavy: true },
+    sign: { radius: 0.9, points: 15, label: "Signpost", chunks: 4, heavy: false },
   };
 
   let props = [];
@@ -375,17 +562,31 @@
   let coins = [];
   let tnt = [];
 
+  // The crate that is hiding the way out. Not a normal prop: it has to survive
+  // a gentle nudge and only give up its secret when you really mean it.
+  const crate = { x: 0, z: 0, yaw: 0, alive: true, shake: 0 };
+  const CRATE_RADIUS = 4.2;
+  const CRATE_SPEED = 11; // how hard you have to hit it
+
   const truck = {
     x: 0,
+    y: 0,
     z: 0,
+    vy: 0,
     yaw: 0,
     speed: 0,
     steerAngle: 0,
     bodyPitch: 0,
     bodyRoll: 0,
+    groundPitch: 0,
+    groundRoll: 0,
     cargoLoad: 0,
+    airborne: false,
+    airTime: 0,
+    outside: false,
+    lastGround: 0,
   };
-  const trailer = { x: 0, z: 0, yaw: 0, hooked: false };
+  const trailer = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, hooked: false };
 
   let smashed = 0;
   let points = 0;
@@ -396,6 +597,11 @@
   let respawnTimer = 0;
   let state = "playing"; // "playing" | "exploding"
   let explosionTimer = 0;
+  let escaped = false; // has the player made it out past the fence yet
+  let hintTimer = 0;
+  let bestAir = 0;
+
+  const GRAVITY = 26;
   let deathTint = [255, 120, 40];
 
   const COIN_POINTS = 20;
@@ -416,13 +622,29 @@
   ];
 
   const placeProp = (kind, x, z, yaw) => {
-    props.push({ kind, x, z, yaw, alive: true, tilt: 0 });
+    props.push({ kind, x, y: surfaceHeight(x, z), z, yaw, alive: true, tilt: 0 });
   };
   const placeCoin = (x, z) => {
-    coins.push({ x, z, alive: true, phase: range(0, Math.PI * 2) });
+    coins.push({
+      x,
+      y: surfaceHeight(x, z),
+      z,
+      alive: true,
+      phase: range(0, Math.PI * 2),
+    });
   };
   const placeTnt = (x, z, yaw) => {
-    tnt.push({ x, z, yaw });
+    tnt.push({ x, y: surfaceHeight(x, z), z, yaw });
+  };
+
+  // How far a point sits from the tunnel's line, so nothing gets built on top
+  // of the one route out.
+  const clearOfTunnel = (x, z, margin) => {
+    const s = tunnelS(x, z);
+    if (s < tunnel.sMouth - margin || s > tunnel.sEnd + margin) {
+      return true;
+    }
+    return Math.abs(tunnelT(x, z)) > tunnel.hw + margin;
   };
 
   const buildWorld = () => {
@@ -430,6 +652,31 @@
     debris = [];
     coins = [];
     tnt = [];
+    bumps = [];
+
+    // Pick which way out of the field the tunnel runs, then park the crate on
+    // top of the entrance.
+    setTunnelAngle(range(0, Math.PI * 2));
+    tunnel.open = false;
+    const mouth = tunnelXZ(54, 0);
+    crate.x = mouth[0];
+    crate.z = mouth[1];
+    crate.yaw = tunnel.angle;
+    crate.alive = true;
+    crate.shake = 0;
+
+    // Launch ramps out on the plain. Kept off the tunnel line and away from
+    // the exit so you always land somewhere sane coming out.
+    for (let i = 0; i < 14; i += 1) {
+      const a = range(0, Math.PI * 2);
+      const d = range(126, 320);
+      const bx = Math.sin(a) * d;
+      const bz = Math.cos(a) * d;
+      if (!clearOfTunnel(bx, bz, 30)) {
+        continue;
+      }
+      bumps.push({ x: bx, z: bz, r: range(17, 28), h: range(6, 11) });
+    }
 
     // A ring of gates to charge through.
     for (let i = 0; i < 6; i += 1) {
@@ -490,16 +737,84 @@
       placeTnt(Math.sin(a) * d, Math.cos(a) * d, range(0, Math.PI * 2));
     }
 
-    // Clear a little space around the spawn point.
-    props = props.filter((p) => Math.hypot(p.x, p.z) > 9);
+    /*
+      Everything past here is the part the fence is hiding. It is generated up
+      front and simply sits there: the field looks like the whole game right up
+      until the moment the crate goes off.
+    */
+
+    // Woods and rockfields climbing away from the plain into the mountains.
+    for (let i = 0; i < 60; i += 1) {
+      const a = range(0, Math.PI * 2);
+      const d = range(124, 420);
+      const cx = Math.sin(a) * d;
+      const cz = Math.cos(a) * d;
+      const high = surfaceHeight(cx, cz) > 46;
+      const n = Math.round(range(2, 6));
+      for (let j = 0; j < n; j += 1) {
+        const px = cx + range(-9, 9);
+        const pz = cz + range(-9, 9);
+        if (!clearOfTunnel(px, pz, 14)) {
+          continue;
+        }
+        let kind;
+        if (high) {
+          kind = random() > 0.4 ? "rock" : "boulder";
+        } else if (random() > 0.75) {
+          kind = random() > 0.5 ? "rock" : "boulder";
+        } else {
+          kind = "pine";
+        }
+        placeProp(kind, px, pz, range(0, Math.PI * 2));
+      }
+    }
+
+    // A reward for getting out, and more of it the further you push.
+    for (let i = 0; i < 46; i += 1) {
+      const a = range(0, Math.PI * 2);
+      const d = range(122, 400);
+      const cxx = Math.sin(a) * d;
+      const czz = Math.cos(a) * d;
+      if (clearOfTunnel(cxx, czz, 12)) {
+        placeCoin(cxx, czz);
+      }
+    }
+    // Coins strung up the sides of the ramps, to point at the jumps.
+    for (let i = 0; i < bumps.length; i += 1) {
+      const b = bumps[i];
+      const dir = range(0, Math.PI * 2);
+      for (let j = -1; j <= 3; j += 1) {
+        placeCoin(b.x + Math.sin(dir) * j * 9, b.z + Math.cos(dir) * j * 9);
+      }
+    }
+
+    // A signpost on the far side of the tunnel, so the first thing you see out
+    // there is somebody admitting the field was never the whole world.
+    const exit = tunnelXZ(tunnel.sEnd + 9, 0);
+    placeProp("sign", exit[0], exit[1], tunnel.angle + Math.PI);
+
+    // Clear a little space around the spawn point, the crate and the tunnel.
+    props = props.filter(
+      (p) =>
+        Math.hypot(p.x, p.z) > 9 &&
+        Math.hypot(p.x - crate.x, p.z - crate.z) > 11 &&
+        (p.kind === "sign" || clearOfTunnel(p.x, p.z, 9))
+    );
     coins = coins.filter((c) => Math.hypot(c.x, c.z) > 9);
-    tnt = tnt.filter((t) => Math.hypot(t.x, t.z) > 12);
+    tnt = tnt.filter(
+      (t) =>
+        Math.hypot(t.x, t.z) > 12 &&
+        Math.hypot(t.x - crate.x, t.z - crate.z) > 14 &&
+        clearOfTunnel(t.x, t.z, 12)
+    );
 
     const a = range(0, Math.PI * 2);
     const d = range(24, 34);
     trailer.x = Math.sin(a) * d;
     trailer.z = Math.cos(a) * d;
     trailer.yaw = range(0, Math.PI * 2);
+    trailer.y = 0;
+    trailer.pitch = 0;
     trailer.hooked = false;
   };
 
@@ -538,7 +853,212 @@
     }
   };
 
+  /*
+    Ground is a camera-centred clipmap: three square rings of quads, each one
+    three times coarser than the one inside it. Fine detail follows you around
+    and the far hills cost almost nothing.
+
+    Two rules keep it honest. Ring boundaries land on the coarser ring's grid
+    and the fine ring's outer vertices are snapped onto the coarse edge, so
+    there are no cracks. And every quad is one-sided: from below, ground is
+    culled, which is what lets you sit in the trench and see sky overhead
+    instead of the underside of the field.
+  */
+  const RINGS = [
+    { cell: 8, half: 48 },
+    { cell: 24, half: 144 },
+    { cell: 72, half: 360 },
+  ];
+
+  const ringCenter = (idx) => {
+    const snap = idx + 1 < RINGS.length ? RINGS[idx + 1].cell : RINGS[idx].cell;
+    return [Math.round(cam.x / snap) * snap, Math.round(cam.z / snap) * snap];
+  };
+
+  // Height of one mesh vertex. On the ring's outer edge it is pulled onto the
+  // straight line the coarser ring will draw there, which is what removes the
+  // cracks between levels.
+  const meshHeight = (x, z, cx, cz, half, parent) => {
+    if (!parent) {
+      return surfaceHeight(x, z);
+    }
+    const onX = x === cx - half || x === cx + half;
+    const onZ = z === cz - half || z === cz + half;
+    if (onX === onZ) {
+      return surfaceHeight(x, z);
+    }
+    if (onX) {
+      const t0 = Math.floor(z / parent) * parent;
+      const f = (z - t0) / parent;
+      return f === 0
+        ? surfaceHeight(x, z)
+        : lerp(surfaceHeight(x, t0), surfaceHeight(x, t0 + parent), f);
+    }
+    const t0 = Math.floor(x / parent) * parent;
+    const f = (x - t0) / parent;
+    return f === 0
+      ? surfaceHeight(x, z)
+      : lerp(surfaceHeight(t0, z), surfaceHeight(t0 + parent, z), f);
+  };
+
+  const TERRAIN_STOPS = [
+    [0, [96, 156, 84]],
+    [16, [104, 152, 84]],
+    [34, [124, 146, 96]],
+    [52, [142, 132, 110]],
+    [70, [152, 150, 154]],
+    [92, [236, 240, 246]],
+  ];
+  const ROCK = [132, 126, 122];
+  const colorScratch = [0, 0, 0];
+  // Aimed at from far below, so every ground quad's normal ends up pointing up.
+  const FLAT_REF = [0, -4000, 0];
+
+  const terrainColor = (h, x, z, slope) => {
+    let i = 0;
+    while (i < TERRAIN_STOPS.length - 2 && h > TERRAIN_STOPS[i + 1][0]) {
+      i += 1;
+    }
+    const a = TERRAIN_STOPS[i];
+    const b = TERRAIN_STOPS[i + 1];
+    const t = clamp((h - a[0]) / (b[0] - a[0]), 0, 1);
+    const rock = clamp((slope - 0.5) * 1.6, 0, 0.75);
+    // Colour variation has to die out as the ground flattens: at height zero
+    // these quads butt straight up against the one big flat field quad, and
+    // any tint at all shows up as a hard wedge across the grass.
+    const vary = clamp(Math.abs(h) / 12, 0, 1);
+    const mottle =
+      1 + 0.045 * vary * Math.sin(x * 0.047 + 1.3) * Math.cos(z * 0.041 - 0.8);
+    for (let k = 0; k < 3; k += 1) {
+      colorScratch[k] = lerp(lerp(a[1][k], b[1][k], t), ROCK[k], rock) * mottle;
+    }
+    return colorScratch;
+  };
+
+  /*
+    Cheap proof that a cell is part of the flat field: its furthest corner is
+    still inside FLAT_R and no launch ramp reaches it. Flat cells are already
+    covered by the single big ground quad, so proving it lets the mesh skip
+    them without ever evaluating the terrain there -- which is what keeps the
+    field itself costing exactly what it cost before there were mountains.
+  */
+  const cellIsFlat = (x0, z0, cell) => {
+    const fx = Math.max(Math.abs(x0), Math.abs(x0 + cell));
+    const fz = Math.max(Math.abs(z0), Math.abs(z0 + cell));
+    if (fx * fx + fz * fz > FLAT_R * FLAT_R) {
+      return false;
+    }
+    for (let i = 0; i < bumps.length; i += 1) {
+      const b = bumps[i];
+      if (
+        b.x > x0 - b.r &&
+        b.x < x0 + cell + b.r &&
+        b.z > z0 - b.r &&
+        b.z < z0 + cell + b.r
+      ) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  // Quads with any relief are held back for the main pass so hills can occlude
+  // props and the truck. The flat field never occludes anything, so it goes out
+  // early as one quad and lets the painted-on field lines sit over it.
+  const reliefPool = [];
+  let reliefCount = 0;
+
+  const queueRelief = (verts, color) => {
+    let slot = reliefPool[reliefCount];
+    if (!slot) {
+      slot = { verts: null, color: [0, 0, 0] };
+      reliefPool[reliefCount] = slot;
+    }
+    slot.verts = verts;
+    slot.color[0] = color[0];
+    slot.color[1] = color[1];
+    slot.color[2] = color[2];
+    reliefCount += 1;
+  };
+
+  const drawTerrainRing = (idx) => {
+    const { cell, half } = RINGS[idx];
+    const parent = idx + 1 < RINGS.length ? RINGS[idx + 1].cell : 0;
+    const center = ringCenter(idx);
+    const cx = center[0];
+    const cz = center[1];
+    let hx0 = 0;
+    let hx1 = 0;
+    let hz0 = 0;
+    let hz1 = 0;
+    let hole = false;
+    if (idx > 0) {
+      const prev = ringCenter(idx - 1);
+      const ph = RINGS[idx - 1].half;
+      hx0 = prev[0] - ph;
+      hx1 = prev[0] + ph;
+      hz0 = prev[1] - ph;
+      hz1 = prev[1] + ph;
+      hole = true;
+    }
+    const n = (half * 2) / cell;
+    const pad = cell * 0.75;
+    // Past FOG_FAR a quad is pure fog and indistinguishable from the sky it
+    // would be drawn against, so there is nothing to gain by drawing it.
+    const maxD = FOG_FAR;
+    for (let i = 0; i < n; i += 1) {
+      const x0 = cx - half + i * cell;
+      const x1 = x0 + cell;
+      for (let j = 0; j < n; j += 1) {
+        const z0 = cz - half + j * cell;
+        const z1 = z0 + cell;
+        if (hole && x0 >= hx0 && x1 <= hx1 && z0 >= hz0 && z1 <= hz1) {
+          continue;
+        }
+        if (cellIsFlat(x0, z0, cell)) {
+          continue;
+        }
+        const dx = x0 + cell / 2 - cam.x;
+        const dz = z0 + cell / 2 - cam.z;
+        if (dx * dx + dz * dz > maxD * maxD) {
+          continue;
+        }
+        const fwd = dx * camFlat[0] + dz * camFlat[1];
+        if (fwd < -pad) {
+          continue;
+        }
+        const side = dx * camFlat[1] - dz * camFlat[0];
+        if (Math.abs(side) > Math.abs(fwd) * hfovTan * 1.12 + pad * 1.6) {
+          continue;
+        }
+
+        const h00 = meshHeight(x0, z0, cx, cz, half, parent);
+        const h10 = meshHeight(x1, z0, cx, cz, half, parent);
+        const h11 = meshHeight(x1, z1, cx, cz, half, parent);
+        const h01 = meshHeight(x0, z1, cx, cz, half, parent);
+        const verts = [
+          [x0, h00, z0],
+          [x1, h10, z0],
+          [x1, h11, z1],
+          [x0, h01, z1],
+        ];
+        const lo = Math.min(h00, h10, h11, h01);
+        const hi = Math.max(h00, h10, h11, h01);
+        const color = terrainColor(
+          (h00 + h10 + h11 + h01) / 4,
+          x0,
+          z0,
+          (hi - lo) / cell
+        );
+        queueRelief(verts, color);
+      }
+    }
+  };
+
   const drawGround = () => {
+    // One quad for the whole flat world, exactly as before the mountains
+    // existed. Everything with relief is drawn over the top of it later, so
+    // this only ever shows through where the ground really is flat.
     const R = 190;
     pushPoly(
       [
@@ -547,38 +1067,196 @@
         [cam.x + R, 0, cam.z + R],
         [cam.x - R, 0, cam.z + R],
       ],
-      GRASS
+      GRASS,
+      FLAT_REF,
+      true
     );
-    flushPolys();
 
-    // Grid stripes give a sense of speed without costing much.
-    const step = 8;
-    const near = 88;
-    const x0 = Math.floor((cam.x - near) / step) * step;
-    const z0 = Math.floor((cam.z - near) / step) * step;
-    for (let i = 0; i <= (near * 2) / step; i += 1) {
-      const x = x0 + i * step;
-      const z = z0 + i * step;
-      pushPoly(
-        [
-          [x - 0.13, 0.02, cam.z - near],
-          [x + 0.13, 0.02, cam.z - near],
-          [x + 0.13, 0.02, cam.z + near],
-          [x - 0.13, 0.02, cam.z + near],
-        ],
-        GRASS_DARK
-      );
-      pushPoly(
-        [
-          [cam.x - near, 0.02, z - 0.13],
-          [cam.x - near, 0.02, z + 0.13],
-          [cam.x + near, 0.02, z + 0.13],
-          [cam.x + near, 0.02, z - 0.13],
-        ],
-        GRASS_DARK
-      );
+    reliefCount = 0;
+    for (let i = 0; i < RINGS.length; i += 1) {
+      drawTerrainRing(i);
     }
     flushPolys();
+
+    // The painted lines on the field. Kept exactly as they were -- they are
+    // the speed cue inside the fence -- but clipped to the field so they do
+    // not go running off across the hills.
+    if (Math.hypot(cam.x, cam.z) < 150 && cam.y > 0) {
+      const R = ARENA + 2;
+      const step = 8;
+      const start = Math.ceil((-R) / step) * step;
+      for (let v = start; v < R; v += step) {
+        const halfSpan = Math.sqrt(Math.max(0, R * R - v * v));
+        if (halfSpan < 0.5) {
+          continue;
+        }
+        pushPoly(
+          [
+            [v - 0.13, 0.02, -halfSpan],
+            [v + 0.13, 0.02, -halfSpan],
+            [v + 0.13, 0.02, halfSpan],
+            [v - 0.13, 0.02, halfSpan],
+          ],
+          GRASS_DARK,
+          FLAT_REF,
+          true
+        );
+        pushPoly(
+          [
+            [-halfSpan, 0.02, v - 0.13],
+            [-halfSpan, 0.02, v + 0.13],
+            [halfSpan, 0.02, v + 0.13],
+            [halfSpan, 0.02, v - 0.13],
+          ],
+          GRASS_DARK,
+          FLAT_REF,
+          true
+        );
+      }
+      flushPolys();
+    }
+  };
+
+  // Emitted into the main pass so hills sort against props and the truck.
+  const drawTerrainRelief = () => {
+    for (let i = 0; i < reliefCount; i += 1) {
+      const slot = reliefPool[i];
+      pushPoly(slot.verts, slot.color, FLAT_REF, true);
+    }
+  };
+
+  /* -------------------------------------------------------- trench pieces */
+
+  const TRENCH_FLOOR_C = [128, 104, 78];
+  const TRENCH_WALL_C = [152, 126, 96];
+  const TRENCH_RIM_C = [110, 88, 66];
+  const TRENCH_DARK_C = [26, 22, 20];
+
+  const drawTrench = () => {
+    if (!tunnel.open) {
+      return;
+    }
+    const hw = tunnel.hw;
+    const STEP = 3.4;
+    // Underground the roofed stretch is a real corridor; from up top it has to
+    // stay a solid piece of field with a black hole punched in each end.
+    const inside = cam.y < 0.2;
+    const n = Math.ceil((tunnel.sEnd - tunnel.sMouth) / STEP);
+
+    for (let i = 0; i < n; i += 1) {
+      const s0 = tunnel.sMouth + i * STEP;
+      const s1 = Math.min(tunnel.sEnd, s0 + STEP);
+      const roofed = s1 > tunnel.sLid0 && s0 < tunnel.sLid1;
+      if (roofed && !inside) {
+        continue;
+      }
+      const mid = tunnelXZ((s0 + s1) / 2, 0);
+      if (Math.hypot(mid[0] - cam.x, mid[1] - cam.z) > 210) {
+        continue;
+      }
+      const y0 = trenchFloor(s0);
+      const y1 = trenchFloor(s1);
+      const a = tunnelXZ(s0, -hw);
+      const b = tunnelXZ(s1, -hw);
+      const c = tunnelXZ(s1, hw);
+      const d = tunnelXZ(s0, hw);
+
+      pushPoly(
+        [
+          [a[0], y0, a[1]],
+          [b[0], y1, b[1]],
+          [c[0], y1, c[1]],
+          [d[0], y0, d[1]],
+        ],
+        TRENCH_FLOOR_C,
+        [mid[0], -400, mid[1]],
+        true
+      );
+
+      // Each wall is a single quad facing into the cut. Culling is doing the
+      // real work here: the wall on your side of the trench is dropped, so it
+      // cannot paint over the hole you are trying to look down into.
+      const outA = tunnelXZ((s0 + s1) / 2, -hw - 40);
+      pushPoly(
+        [
+          [a[0], y0, a[1]],
+          [b[0], y1, b[1]],
+          [b[0], 0, b[1]],
+          [a[0], 0, a[1]],
+        ],
+        TRENCH_WALL_C,
+        [outA[0], -1, outA[1]],
+        true
+      );
+      const outB = tunnelXZ((s0 + s1) / 2, hw + 40);
+      pushPoly(
+        [
+          [d[0], y0, d[1]],
+          [c[0], y1, c[1]],
+          [c[0], 0, c[1]],
+          [d[0], 0, d[1]],
+        ],
+        TRENCH_WALL_C,
+        [outB[0], -1, outB[1]],
+        true
+      );
+
+      if (roofed) {
+        const ceil = -tunnel.depth + LID_CLEAR;
+        pushPoly(
+          [
+            [a[0], ceil, a[1]],
+            [b[0], ceil, b[1]],
+            [c[0], ceil, c[1]],
+            [d[0], ceil, d[1]],
+          ],
+          TRENCH_RIM_C,
+          [mid[0], 400, mid[1]],
+          true
+        );
+      }
+    }
+
+    // The two portals. From outside they are flat black -- you cannot see what
+    // is in there, which is the whole point of a secret tunnel.
+    const ceil = -tunnel.depth + LID_CLEAR;
+    for (const end of [
+      { s: tunnel.sLid0, away: 40 },
+      { s: tunnel.sLid1, away: -40 },
+    ]) {
+      const p = tunnelXZ(end.s, -hw);
+      const q = tunnelXZ(end.s, hw);
+      const look = tunnelXZ(end.s + end.away, 0);
+      // Lintel: the strip of ground above the opening.
+      pushPoly(
+        [
+          [p[0], ceil, p[1]],
+          [q[0], ceil, q[1]],
+          [q[0], 0, q[1]],
+          [p[0], 0, p[1]],
+        ],
+        TRENCH_RIM_C,
+        [look[0], (ceil + 0) / 2, look[1]],
+        true
+      );
+      if (!inside) {
+        // Black curtain just inside the mouth, so the portal does not show
+        // daylight straight through the hill.
+        const cp = tunnelXZ(end.s - Math.sign(end.away) * 0.35, -hw);
+        const cq = tunnelXZ(end.s - Math.sign(end.away) * 0.35, hw);
+        pushPoly(
+          [
+            [cp[0], -tunnel.depth, cp[1]],
+            [cq[0], -tunnel.depth, cq[1]],
+            [cq[0], ceil, cq[1]],
+            [cp[0], ceil, cp[1]],
+          ],
+          TRENCH_DARK_C,
+          [look[0], ceil - 1, look[1]],
+          true
+        );
+      }
+    }
   };
 
   const drawBoundary = () => {
@@ -603,47 +1281,94 @@
     }
   };
 
+  /*
+    The field only ever held a few dozen props, all of them close. The
+    mountains hold hundreds, most of them a long way off, and a pine is 22
+    polygons -- so past FAR_PROP the outdoor kinds collapse to a handful of
+    polygons each. At that range it is a green blob either way.
+  */
+  const FAR_PROP = 85;
+
+  const drawPropFar = (p) => {
+    const b = p.y;
+    switch (p.kind) {
+      case "pine":
+        addPyramid(p.x, b + 0.6, p.z, 1.6, 6.6, [56, 116, 68], 4, p.yaw);
+        break;
+      case "rock":
+        addPyramid(p.x, b - 0.3, p.z, 1.05, 1.5, [138, 134, 132], 4, p.yaw);
+        break;
+      case "boulder":
+        addPyramid(p.x, b - 0.6, p.z, 1.9, 3.4, [124, 120, 120], 4, p.yaw);
+        break;
+      default:
+        drawProp(p);
+        break;
+    }
+  };
+
   const drawProp = (p) => {
+    const b = p.y;
     switch (p.kind) {
       case "barrel":
-        addCylinder(p.x, 0, p.z, 0.55, 0.5, [206, 62, 52], 8);
-        addCylinder(p.x, 0.5, p.z, 0.55, 0.4, [238, 238, 234], 8);
-        addCylinder(p.x, 0.9, p.z, 0.55, 0.5, [206, 62, 52], 8, [178, 52, 44]);
+        addCylinder(p.x, b, p.z, 0.55, 0.5, [206, 62, 52], 8);
+        addCylinder(p.x, b + 0.5, p.z, 0.55, 0.4, [238, 238, 234], 8);
+        addCylinder(p.x, b + 0.9, p.z, 0.55, 0.5, [206, 62, 52], 8, [178, 52, 44]);
         break;
       case "crate":
-        addBox(p.x, 0.6, p.z, 0.6, 0.6, 0.6, [186, 138, 82], p.yaw);
-        addBox(p.x, 0.6, p.z, 0.66, 0.12, 0.66, [148, 104, 60], p.yaw);
+        addBox(p.x, b + 0.6, p.z, 0.6, 0.6, 0.6, [186, 138, 82], p.yaw);
+        addBox(p.x, b + 0.6, p.z, 0.66, 0.12, 0.66, [148, 104, 60], p.yaw);
         break;
       case "cone":
-        addBox(p.x, 0.06, p.z, 0.42, 0.06, 0.42, [42, 42, 46], p.yaw);
-        addPyramid(p.x, 0.1, p.z, 0.32, 0.85, [232, 108, 40], 4, p.yaw);
+        addBox(p.x, b + 0.06, p.z, 0.42, 0.06, 0.42, [42, 42, 46], p.yaw);
+        addPyramid(p.x, b + 0.1, p.z, 0.32, 0.85, [232, 108, 40], 4, p.yaw);
         break;
       case "tires":
         for (let i = 0; i < 3; i += 1) {
-          addCylinder(p.x, i * 0.36, p.z, 0.62 - i * 0.04, 0.32, [46, 46, 50], 10, [64, 64, 68]);
+          addCylinder(p.x, b + i * 0.36, p.z, 0.62 - i * 0.04, 0.32, [46, 46, 50], 10, [64, 64, 68]);
         }
         break;
       case "hay":
-        addCylinder(p.x, 0, p.z, 0.85, 1.1, [214, 182, 96], 9, [232, 204, 124]);
+        addCylinder(p.x, b, p.z, 0.85, 1.1, [214, 182, 96], 9, [232, 204, 124]);
         break;
       case "tree":
-        addCylinder(p.x, 0, p.z, 0.3, 1.6, [124, 88, 56], 6);
-        addPyramid(p.x, 1.4, p.z, 1.5, 2.0, [72, 138, 68], 5, p.yaw);
-        addPyramid(p.x, 2.6, p.z, 1.1, 1.8, [86, 156, 78], 5, p.yaw + 0.4);
+        addCylinder(p.x, b, p.z, 0.3, 1.6, [124, 88, 56], 6);
+        addPyramid(p.x, b + 1.4, p.z, 1.5, 2.0, [72, 138, 68], 5, p.yaw);
+        addPyramid(p.x, b + 2.6, p.z, 1.1, 1.8, [86, 156, 78], 5, p.yaw + 0.4);
+        break;
+      // Taller and darker than the field trees, so the woods outside read as
+      // a different place rather than more of the same.
+      case "pine":
+        addCylinder(p.x, b, p.z, 0.34, 2.2, [98, 72, 48], 6);
+        addPyramid(p.x, b + 1.7, p.z, 1.7, 2.6, [48, 104, 62], 5, p.yaw);
+        addPyramid(p.x, b + 3.4, p.z, 1.3, 2.4, [58, 122, 70], 5, p.yaw + 0.5);
+        addPyramid(p.x, b + 5.0, p.z, 0.85, 2.0, [70, 138, 80], 5, p.yaw + 1.0);
+        break;
+      case "rock":
+        addPyramid(p.x, b - 0.3, p.z, 1.05, 1.5, [138, 134, 132], 5, p.yaw);
+        break;
+      case "boulder":
+        addPyramid(p.x, b - 0.6, p.z, 1.9, 2.7, [122, 118, 118], 6, p.yaw);
+        addPyramid(p.x, b + 1.2, p.z, 0.9, 1.1, [148, 144, 142], 5, p.yaw + 0.7);
+        break;
+      case "sign":
+        addBox(p.x, b + 1.1, p.z, 0.11, 1.1, 0.11, [128, 94, 60], p.yaw);
+        addBox(p.x, b + 2.3, p.z, 1.9, 0.6, 0.1, [244, 226, 168], p.yaw);
+        addBox(p.x, b + 2.3, p.z, 1.6, 0.16, 0.14, [196, 74, 58], p.yaw);
         break;
       case "fence":
-        addBox(p.x, 0.75, p.z, 0.14, 0.75, 0.14, [190, 176, 152], p.yaw);
-        addBox(p.x + Math.sin(p.yaw) * 1.6, 1.1, p.z + Math.cos(p.yaw) * 1.6, 0.09, 0.14, 1.6, [222, 214, 196], p.yaw);
-        addBox(p.x + Math.sin(p.yaw) * 1.6, 0.6, p.z + Math.cos(p.yaw) * 1.6, 0.09, 0.14, 1.6, [222, 214, 196], p.yaw);
+        addBox(p.x, b + 0.75, p.z, 0.14, 0.75, 0.14, [190, 176, 152], p.yaw);
+        addBox(p.x + Math.sin(p.yaw) * 1.6, b + 1.1, p.z + Math.cos(p.yaw) * 1.6, 0.09, 0.14, 1.6, [222, 214, 196], p.yaw);
+        addBox(p.x + Math.sin(p.yaw) * 1.6, b + 0.6, p.z + Math.cos(p.yaw) * 1.6, 0.09, 0.14, 1.6, [222, 214, 196], p.yaw);
         break;
       case "gate": {
         const sx = Math.sin(p.yaw);
         const sz = Math.cos(p.yaw);
-        addBox(p.x - sx * 3, 1.6, p.z - sz * 3, 0.32, 1.6, 0.32, [232, 232, 236], p.yaw);
-        addBox(p.x + sx * 3, 1.6, p.z + sz * 3, 0.32, 1.6, 0.32, [232, 232, 236], p.yaw);
-        addBox(p.x, 3.4, p.z, 0.28, 0.36, 3.3, [216, 72, 60], p.yaw);
+        addBox(p.x - sx * 3, b + 1.6, p.z - sz * 3, 0.32, 1.6, 0.32, [232, 232, 236], p.yaw);
+        addBox(p.x + sx * 3, b + 1.6, p.z + sz * 3, 0.32, 1.6, 0.32, [232, 232, 236], p.yaw);
+        addBox(p.x, b + 3.4, p.z, 0.28, 0.36, 3.3, [216, 72, 60], p.yaw);
         for (let i = -2; i <= 2; i += 1) {
-          addBox(p.x + sx * i * 1.2, 1.5, p.z + sz * i * 1.2, 0.12, 1.4, 0.5, [244, 196, 72], p.yaw);
+          addBox(p.x + sx * i * 1.2, b + 1.5, p.z + sz * i * 1.2, 0.12, 1.4, 0.5, [244, 196, 72], p.yaw);
         }
         break;
       }
@@ -652,22 +1377,46 @@
     }
   };
 
+  // The one crate in the field that is worth ramming. Deliberately oversized
+  // and hazard-striped: it should read as "this is not scenery".
+  const drawCrate = () => {
+    if (!crate.alive) {
+      return;
+    }
+    const wob = crate.shake > 0 ? Math.sin(performance.now() / 28) * crate.shake : 0;
+    const x = crate.x + wob * 0.3;
+    const z = crate.z;
+    addBox(x, 3.0, z, 3.0, 3.0, 3.0, [156, 112, 62], crate.yaw, 0, wob * 0.05);
+    // Bands of hazard stripe around the middle.
+    for (let i = -1; i <= 1; i += 1) {
+      addBox(x, 3.0 + i * 1.5, z, 3.08, 0.34, 3.08, i === 0 ? [232, 176, 40] : [40, 38, 40], crate.yaw, 0, wob * 0.05);
+    }
+    addBox(x, 6.05, z, 3.1, 0.16, 3.1, [122, 86, 48], crate.yaw, 0, wob * 0.05);
+    // A big warning triangle on each end.
+    for (const side of [1, -1]) {
+      const fx = x + Math.sin(crate.yaw) * side * 3.06;
+      const fz = z + Math.cos(crate.yaw) * side * 3.06;
+      addPyramid(fx, 1.9, fz, 1.5, 2.2, [236, 190, 44], 3, crate.yaw);
+    }
+  };
+
   const drawCoin = (c) => {
     const bob = 0.55 + Math.sin(performance.now() / 300 + c.phase) * 0.08;
     const spin = performance.now() / 450 + c.phase;
-    addCoin(c.x, bob, c.z, 0.42, 0.12, spin, [255, 214, 64], [210, 160, 40]);
+    addCoin(c.x, c.y + bob, c.z, 0.42, 0.12, spin, [255, 214, 64], [210, 160, 40]);
   };
 
   const drawTnt = (t) => {
     const sx = Math.sin(t.yaw + Math.PI / 2);
     const sz = Math.cos(t.yaw + Math.PI / 2);
+    const b = t.y;
     for (let i = -1; i <= 1; i += 1) {
-      addCylinder(t.x + sx * i * 0.32, 0, t.z + sz * i * 0.32, 0.22, 0.7, [196, 40, 36], 8, [222, 64, 56]);
+      addCylinder(t.x + sx * i * 0.32, b, t.z + sz * i * 0.32, 0.22, 0.7, [196, 40, 36], 8, [222, 64, 56]);
     }
-    addBox(t.x, 0.5, t.z, 0.62, 0.06, 0.62, [246, 238, 210], t.yaw);
-    addCylinder(t.x, 0.7, t.z, 0.04, 0.32, [70, 60, 50], 5);
+    addBox(t.x, b + 0.5, t.z, 0.62, 0.06, 0.62, [246, 238, 210], t.yaw);
+    addCylinder(t.x, b + 0.7, t.z, 0.04, 0.32, [70, 60, 50], 5);
     const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 120);
-    addCylinder(t.x, 1.0, t.z, 0.05 + pulse * 0.03, 0.1, [255, 120 + pulse * 100, 40], 6);
+    addCylinder(t.x, b + 1.0, t.z, 0.05 + pulse * 0.03, 0.1, [255, 120 + pulse * 100, 40], 6);
   };
 
   /* ---------------------------------------------------------------- giant */
@@ -922,6 +1671,11 @@
 
   // Anything of yours under a foot that is at truck height gets flattened.
   const giantHit = () => {
+    // Down in the cut you are under his feet, not under his heel. Getting
+    // below ground is the one place he cannot reach.
+    if (truck.y < -1.2) {
+      return null;
+    }
     const bodies = hitBodies();
     for (let i = 0; i < 2; i += 1) {
       const leg = giant.pose[i];
@@ -1321,12 +2075,13 @@
 
   const drawTruck = () => {
     const { x, z, yaw } = truck;
-    const pitch = truck.bodyPitch;
-    const roll = truck.bodyRoll;
+    // Suspension lean plus whatever the ground underneath is doing.
+    const pitch = truck.bodyPitch + truck.groundPitch;
+    const roll = truck.bodyRoll + truck.groundRoll;
     // Local offsets rotated into the world, so the whole truck leans together.
     const at = (lx, ly, lz) => {
       const p = rotate(lx, ly, lz, yaw, pitch, roll);
-      return [x + p[0], 0.62 + p[1], z + p[2]];
+      return [x + p[0], truck.y + 0.62 + p[1], z + p[2]];
     };
 
     const chassis = at(0, 0.18, 0);
@@ -1375,6 +2130,8 @@
 
   const drawTrailer = () => {
     const { x, z, yaw } = trailer;
+    const ty = trailer.y;
+    const tp = trailer.pitch;
     // Trailer parts only need placing on the ground plane, so this maps a
     // local (sideways, forward) offset onto the world.
     const at = (lx, lz) => [
@@ -1386,19 +2143,19 @@
     const sag = trailer.hooked ? clamp(coinsCollected * 0.006, 0, 0.12) : 0;
 
     // Kept low on purpose: a tall box trailer would hide the whole world.
-    addBox(x, 0.78 - sag, z, 1.15, 0.14, 2.5, [72, 76, 86], yaw);
-    addBox(x, 1.28 - sag, z, 1.12, 0.42, 2.45, [236, 198, 80], yaw);
-    addBox(x, 1.74 - sag, z, 1.18, 0.06, 2.55, [252, 226, 130], yaw);
+    addBox(x, ty + 0.78 - sag, z, 1.15, 0.14, 2.5, [72, 76, 86], yaw, tp);
+    addBox(x, ty + 1.28 - sag, z, 1.12, 0.42, 2.45, [236, 198, 80], yaw, tp);
+    addBox(x, ty + 1.74 - sag, z, 1.18, 0.06, 2.55, [252, 226, 130], yaw, tp);
 
     const tongue = at(0, TONGUE - 0.4);
-    addBox(tongue[0], 0.6, tongue[1], 0.14, 0.12, 0.9, [92, 96, 104], yaw);
+    addBox(tongue[0], ty + 0.6 - Math.sin(tp) * (TONGUE - 0.4), tongue[1], 0.14, 0.12, 0.9, [92, 96, 104], yaw, tp);
     const ring = at(0, TONGUE);
-    addCylinder(ring[0], 0.52, ring[1], 0.2, 0.24, [232, 196, 72], 6);
+    addCylinder(ring[0], ty + 0.52 - Math.sin(tp) * TONGUE, ring[1], 0.2, 0.24, [232, 196, 72], 6);
 
     for (const side of [-1, 1]) {
       for (const along of [-1.5, -0.5]) {
         const wheel = at(side * 1.18, along);
-        addBox(wheel[0], 0.45, wheel[1], 0.18, 0.45, 0.45, WHEEL, yaw);
+        addBox(wheel[0], ty + 0.45 - Math.sin(tp) * along, wheel[1], 0.18, 0.45, 0.45, WHEEL, yaw);
       }
     }
 
@@ -1413,7 +2170,7 @@
         const p = at(lx, lz);
         addCoin(
           p[0],
-          1.0 - sag + layer * 0.15,
+          ty + 1.0 - sag + layer * 0.15 - Math.sin(tp) * lz,
           p[1],
           0.22,
           0.06,
@@ -1425,7 +2182,7 @@
     }
 
     if (!trailer.hooked) {
-      const bob = 4.4 + Math.sin(performance.now() / 260) * 0.35;
+      const bob = ty + 4.4 + Math.sin(performance.now() / 260) * 0.35;
       addBox(x, bob + 0.8, z, 0.18, 0.6, 0.18, [252, 220, 70]);
       addPyramid(x, bob + 0.8, z, 0.6, -0.8, [252, 220, 70], 4, Math.PI / 4);
     }
@@ -1550,7 +2307,7 @@
       const spd = range(4, 15);
       debris.push({
         x,
-        y: range(0.3, 1.4),
+        y: groundHeight(x, z) + range(0.3, 1.4),
         z,
         vx: Math.cos(ang) * spd,
         vy: range(6, 15) * lift,
@@ -1616,6 +2373,11 @@
       if (!p.alive) {
         continue;
       }
+      // Out in the hills things can be well above or below you without being
+      // anywhere near you.
+      if (Math.abs(p.y - truck.y) > 4) {
+        continue;
+      }
       const reach = KINDS[p.kind].radius;
       for (let b = 0; b < bodies.length; b += 1) {
         const body = bodies[b];
@@ -1629,6 +2391,72 @@
     }
   };
 
+  /*
+    The crate is the whole trick. It shrugs off a gentle bump -- which is what
+    makes people back up and try again -- and only when you hit it properly
+    does it come apart and leave a hole in the ground where it was standing.
+  */
+  const openTunnel = () => {
+    crate.alive = false;
+    tunnel.open = true;
+    points += 200;
+    updateScoreLabel();
+    setMessage("The crate was sitting on a HOLE. Drive in!", 5);
+    for (let i = 0; i < 60; i += 1) {
+      const ang = range(0, Math.PI * 2);
+      const spd = range(3, 14);
+      debris.push({
+        x: crate.x + range(-2, 2),
+        y: range(0.4, 6),
+        z: crate.z + range(-2, 2),
+        vx: Math.cos(ang) * spd,
+        vy: range(5, 16),
+        vz: Math.sin(ang) * spd,
+        yaw: range(0, 6.3),
+        pitch: range(0, 6.3),
+        roll: range(0, 6.3),
+        spinY: range(-12, 12),
+        spinX: range(-12, 12),
+        spinZ: range(-12, 12),
+        size: range(0.18, 0.55),
+        color: random() > 0.62 ? [250, 150, 45] : [156, 112, 62],
+        life: range(1.1, 2.2),
+      });
+    }
+  };
+
+  const updateCrate = (dt) => {
+    if (crate.shake > 0) {
+      crate.shake = Math.max(0, crate.shake - dt * 2.2);
+    }
+    if (!crate.alive) {
+      return;
+    }
+    const bodies = hitBodies();
+    for (let b = 0; b < bodies.length; b += 1) {
+      const body = bodies[b];
+      const dx = crate.x - body[0];
+      const dz = crate.z - body[1];
+      const reach = CRATE_RADIUS + body[2];
+      if (dx * dx + dz * dz >= reach * reach) {
+        continue;
+      }
+      if (Math.abs(truck.speed) >= CRATE_SPEED) {
+        openTunnel();
+      } else {
+        // Bounce off and shove the truck clear, so it cannot sit inside the
+        // crate grinding against it.
+        const d = Math.max(0.001, Math.hypot(dx, dz));
+        truck.x = crate.x - (dx / d) * reach;
+        truck.z = crate.z - (dz / d) * reach;
+        truck.speed = -truck.speed * 0.35;
+        crate.shake = 1;
+        setMessage("OOF. That crate is solid -- get a proper run-up!", 2.4);
+      }
+      return;
+    }
+  };
+
   const updateCoins = () => {
     if (!trailer.hooked) {
       return;
@@ -1636,7 +2464,7 @@
     const bodies = hitBodies();
     for (let i = 0; i < coins.length; i += 1) {
       const c = coins[i];
-      if (!c.alive) {
+      if (!c.alive || Math.abs(c.y - truck.y) > 4) {
         continue;
       }
       for (let b = 0; b < bodies.length; b += 1) {
@@ -1656,6 +2484,9 @@
     const bodies = hitBodies();
     for (let i = 0; i < tnt.length; i += 1) {
       const t = tnt[i];
+      if (Math.abs(t.y - truck.y) > 3) {
+        continue;
+      }
       for (let b = 0; b < bodies.length; b += 1) {
         const body = bodies[b];
         const dx = t.x - body[0];
@@ -1697,19 +2528,140 @@
 
     const grip = clamp(Math.abs(truck.speed) / 6, 0, 1);
     const turn =
-      steer * 2.0 * grip * dt * (truck.speed < 0 ? -1 : 1) * (trailer.hooked ? 0.85 - cargoLoad * 0.35 : 1);
+      steer * 2.0 * grip * dt * (truck.speed < 0 ? -1 : 1) *
+      (trailer.hooked ? 0.85 - cargoLoad * 0.35 : 1) *
+      (truck.airborne ? 0.3 : 1);
     truck.yaw = wrapAngle(truck.yaw + turn);
 
     truck.x += Math.sin(truck.yaw) * truck.speed * dt;
     truck.z += Math.cos(truck.yaw) * truck.speed * dt;
 
-    // Keep everyone inside the fence.
+    /*
+      The fence is a hard wall from whichever side you are on, and the only
+      hole in it is the tunnel. `outside` is only ever re-decided while the
+      truck is down in the cut, so popping out the far end is what actually
+      moves you into the big world -- you cannot cheat over the top.
+    */
+    const corridor = inTrench(truck.x, truck.z);
     const dist = Math.hypot(truck.x, truck.z);
-    if (dist > ARENA) {
+    if (corridor) {
+      truck.outside = dist > ARENA + 2.5;
+      if (truck.outside && !escaped) {
+        escaped = true;
+        points += 500;
+        updateScoreLabel();
+        setMessage("You're OUT. Go and see how big this place is. +500", 5);
+      }
+      // Walls of the cut: once you are properly down in it you stay in it.
+      if (truck.y < -1.0) {
+        const s = tunnelS(truck.x, truck.z);
+        const t = tunnelT(truck.x, truck.z);
+        const limit = tunnel.hw - 1.15;
+        if (Math.abs(t) > limit) {
+          const fixed = tunnelXZ(s, Math.sign(t) * limit);
+          truck.x = fixed[0];
+          truck.z = fixed[1];
+          truck.speed *= 0.86;
+        }
+      }
+    } else if (!truck.outside && dist > ARENA) {
       truck.x = (truck.x / dist) * ARENA;
       truck.z = (truck.z / dist) * ARENA;
       truck.speed *= 0.5;
+    } else if (truck.outside && dist < ARENA + 4) {
+      truck.x = (truck.x / dist) * (ARENA + 4);
+      truck.z = (truck.z / dist) * (ARENA + 4);
+      truck.speed *= 0.5;
     }
+
+    /* ------------------------------------------------------------ up/down */
+
+    const ground = groundHeight(truck.x, truck.z);
+    // Rate the ground under the truck is rising, measured between frames. On
+    // the way up a hill this is the truck's real vertical speed, and carrying
+    // it over the crest is what launches the truck instead of gluing it to
+    // the far side.
+    const climb = clamp((ground - truck.lastGround) / Math.max(dt, 0.0001), -60, 30);
+    truck.lastGround = ground;
+
+    truck.vy -= GRAVITY * dt;
+    truck.y += truck.vy * dt;
+    if (truck.y <= ground + 0.02) {
+      if (truck.airborne && truck.vy < -6) {
+        const impact = -truck.vy;
+        truck.bodyPitch -= clamp(impact * 0.006, 0, 0.14);
+        truck.speed *= impact > 22 ? 0.7 : 0.92;
+        if (truck.airTime > 0.55) {
+          const award = Math.round(truck.airTime * 60);
+          points += award;
+          if (truck.airTime > bestAir) {
+            bestAir = truck.airTime;
+          }
+          setMessage(
+            `${truck.airTime.toFixed(1)}s of air! +${award}`,
+            1.6
+          );
+          updateScoreLabel();
+        }
+        for (let i = 0; i < 8; i += 1) {
+          debris.push({
+            x: truck.x + range(-1.2, 1.2),
+            y: ground + 0.2,
+            z: truck.z + range(-1.2, 1.2),
+            vx: range(-3, 3),
+            vy: range(1, 4),
+            vz: range(-3, 3),
+            yaw: range(0, 6.3),
+            pitch: range(0, 6.3),
+            roll: range(0, 6.3),
+            spinY: range(-6, 6),
+            spinX: range(-6, 6),
+            spinZ: range(-6, 6),
+            size: range(0.1, 0.22),
+            color: [176, 168, 140],
+            life: 0.5,
+          });
+        }
+      }
+      truck.y = ground;
+      truck.vy = Math.max(climb, 0);
+      truck.airborne = false;
+      truck.airTime = 0;
+    } else {
+      truck.airborne = true;
+      truck.airTime += dt;
+    }
+    // Never let the truck climb through the roof of the tunnel.
+    const ceiling = lidCeiling(truck.x, truck.z);
+    if (ceiling !== null && truck.y > ceiling - 2.1) {
+      truck.y = ceiling - 2.1;
+      if (truck.vy > 0) {
+        truck.vy = 0;
+      }
+    }
+
+    // Gravity pulling along the slope, so climbing a mountain costs you and
+    // dropping off one is free speed.
+    const probe = 2.4;
+    const fx = Math.sin(truck.yaw) * probe;
+    const fz = Math.cos(truck.yaw) * probe;
+    const ahead = groundHeight(truck.x + fx, truck.z + fz);
+    const behind = groundHeight(truck.x - fx, truck.z - fz);
+    const grade = (ahead - behind) / (probe * 2);
+    if (!truck.airborne) {
+      truck.speed -= clamp(grade, -1.2, 1.2) * 15 * dt;
+    }
+
+    // Sit the body on the slope.
+    const rx = Math.cos(truck.yaw) * probe;
+    const rz = -Math.sin(truck.yaw) * probe;
+    const left = groundHeight(truck.x - rx, truck.z - rz);
+    const right = groundHeight(truck.x + rx, truck.z + rz);
+    const wantPitch = truck.airborne ? 0 : Math.atan(grade);
+    const wantRoll = truck.airborne ? 0 : Math.atan((right - left) / (probe * 2));
+    const settle = 1 - Math.pow(0.0008, dt);
+    truck.groundPitch = lerp(truck.groundPitch, clamp(wantPitch, -0.9, 0.9), settle);
+    truck.groundRoll = lerp(truck.groundRoll, clamp(wantRoll, -0.7, 0.7), settle);
 
     // Cheap suspension: squat under acceleration, lean into turns, and sag a
     // little more under a heavy trailer.
@@ -1726,6 +2678,32 @@
     hookArmed = false;
     unhookButton.hidden = true;
     setMessage("Trailer dropped.");
+  };
+
+  // Sit the trailer on whatever it is standing over, and tip it along its own
+  // length so it does not float nose-up on a hillside.
+  const settleTrailer = (dt) => {
+    const here = groundHeight(trailer.x, trailer.z);
+    const want =
+      trailer.hooked && truck.airborne ? Math.max(here, truck.y - 0.5) : here;
+    const ease = 1 - Math.pow(0.0005, dt);
+    // Settling downward is smoothed like suspension, but rising ground pushes
+    // the trailer up immediately -- otherwise it lags a metre into a hillside
+    // on the way up a mountain.
+    trailer.y = Math.max(lerp(trailer.y, want, ease), here);
+    const nose = groundHeight(
+      trailer.x + Math.sin(trailer.yaw) * 2.2,
+      trailer.z + Math.cos(trailer.yaw) * 2.2
+    );
+    const tail = groundHeight(
+      trailer.x - Math.sin(trailer.yaw) * 2.2,
+      trailer.z - Math.cos(trailer.yaw) * 2.2
+    );
+    trailer.pitch = lerp(
+      trailer.pitch,
+      truck.airborne ? 0 : clamp(Math.atan((nose - tail) / 4.4), -0.8, 0.8),
+      ease
+    );
   };
 
   const updateTrailer = () => {
@@ -1767,6 +2745,29 @@
 
   // Quietly stand smashed props back up once they are well out of sight, so
   // the field never runs out of things to flatten.
+  /*
+    The crate is meant to be found, not stumbled on by accident and not
+    spelled out either. If somebody has been driving around a while without
+    touching it, the status line starts muttering about it.
+  */
+  const updateHint = (dt) => {
+    if (tunnel.open || !hookedOnce) {
+      return;
+    }
+    hintTimer += dt;
+    if (hintTimer < 42 || messageTimer > 0) {
+      return;
+    }
+    hintTimer = 0;
+    const dist = Math.hypot(truck.x - crate.x, truck.z - crate.z);
+    setMessage(
+      dist < 30
+        ? "That big striped crate sounds hollow..."
+        : "There is one crate out there far too big to be a crate.",
+      4
+    );
+  };
+
   const updateRespawn = (dt) => {
     respawnTimer -= dt;
     if (respawnTimer > 0) {
@@ -1800,7 +2801,7 @@
       d.yaw += d.spinY * dt;
       d.pitch += d.spinX * dt;
       d.roll += d.spinZ * dt;
-      const floor = d.size * 0.8;
+      const floor = groundHeight(d.x, d.z) + d.size * 0.8;
       if (d.y < floor) {
         d.y = floor;
         d.vy *= -0.34;
@@ -1818,9 +2819,12 @@
 
   const updateCamera = (dt) => {
     // Hooked up, the camera has to clear the trailer, so it backs off and
-    // climbs -- otherwise the trailer is all you can see.
-    const back = trailer.hooked ? 17 : 11;
-    const height = trailer.hooked ? 7.2 : 5;
+    // climbs -- otherwise the trailer is all you can see. Down in the cut it
+    // has to do the opposite and tuck right in behind, or it ends up buried
+    // in a wall looking at dirt.
+    const underground = truck.y < -0.9;
+    const back = underground ? 8.5 : trailer.hooked ? 17 : 11;
+    const height = underground ? 2.6 : trailer.hooked ? 7.2 : 5;
     const follow = 1 - Math.pow(0.0009, dt);
     cam.yaw = wrapAngle(cam.yaw + wrapAngle(truck.yaw - cam.yaw) * follow);
 
@@ -1829,13 +2833,23 @@
     const move = 1 - Math.pow(0.0001, dt);
     cam.x = lerp(cam.x, targetX, move);
     cam.z = lerp(cam.z, targetZ, move);
-    cam.y = lerp(cam.y, height, move);
+    cam.y = lerp(cam.y, truck.y + height, move);
+
+    // Never let the camera end up inside a hill, or above the tunnel roof.
+    const under = groundHeight(cam.x, cam.z) + 2.2;
+    if (cam.y < under) {
+      cam.y = under;
+    }
+    const roof = lidCeiling(cam.x, cam.z);
+    if (roof !== null && cam.y > roof - 0.5) {
+      cam.y = roof - 0.5;
+    }
 
     // Aim a little ahead of the truck so you can see what you are about to hit.
     const lookX = truck.x + Math.sin(truck.yaw) * 5;
     const lookZ = truck.z + Math.cos(truck.yaw) * 5;
     const flat = Math.max(1, Math.hypot(lookX - cam.x, lookZ - cam.z));
-    cam.pitch = Math.atan2(cam.y - 1.4, flat);
+    cam.pitch = Math.atan2(cam.y - (truck.y + 1.4), flat);
 
     /*
       The giant is 60 metres tall, so at any range you would actually meet him
@@ -2007,9 +3021,48 @@
       ctx.fillText(text, W - w, 20);
     }
 
-    // Giant warning: he is easy to miss when all you can see is a leg.
+    // Out past the fence there is no fence to navigate by, so say how far out
+    // you are and how high you have climbed, and point the way back.
+    if (truck.outside) {
+      const out = Math.round(Math.hypot(truck.x, truck.z));
+      const text = `${out} m out  ·  ${Math.round(truck.y)} m up`;
+      const w = ctx.measureText(text).width + 24;
+      ctx.fillStyle = "rgba(0,0,0,0.45)";
+      ctx.fillRect(12, 52, w, 34);
+      ctx.fillStyle = "#bfe6ff";
+      ctx.fillText(text, 24, 60);
+
+      const exit = tunnelXZ(tunnel.sEnd + 2, 0);
+      const angle = wrapAngle(Math.atan2(exit[0] - cam.x, exit[1] - cam.z) - cam.yaw);
+      if (Math.abs(angle) > 0.6) {
+        const side = angle > 0 ? 1 : -1;
+        const x = W / 2 + side * (W / 2 - 44);
+        const y = H / 2 + 74;
+        ctx.fillStyle = "rgba(160,220,255,0.8)";
+        ctx.beginPath();
+        ctx.moveTo(x + side * 16, y);
+        ctx.lineTo(x - side * 11, y - 17);
+        ctx.lineTo(x - side * 11, y + 17);
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+
+    if (truck.airborne && truck.airTime > 0.5) {
+      ctx.font = "700 30px 'Trebuchet MS', sans-serif";
+      const text = `AIR!  ${truck.airTime.toFixed(1)}s`;
+      const w = ctx.measureText(text).width;
+      ctx.fillStyle = "rgba(0,0,0,0.35)";
+      ctx.fillRect(W / 2 - w / 2 - 14, H / 2 - 96, w + 28, 44);
+      ctx.fillStyle = "#ffe14a";
+      ctx.fillText(text, W / 2 - w / 2, H / 2 - 86);
+      ctx.font = "600 18px 'Trebuchet MS', sans-serif";
+    }
+
+    // Giant warning: he is easy to miss when all you can see is a leg. He
+    // cannot leave the field, so it is only worth saying while you are in it.
     const gDist = Math.hypot(giant.x - truck.x, giant.z - truck.z);
-    if (gDist < 62) {
+    if (!truck.outside && gDist < 62) {
       const near = gDist < 26;
       const text = near ? "GIANT ON TOP OF YOU!" : "Giant nearby";
       const w = ctx.measureText(text).width + 24;
@@ -2061,9 +3114,12 @@
     if (state === "playing") {
       updateTruck(dt);
       updateTrailer();
+      settleTrailer(dt);
+      updateCrate(dt);
       updateCollisions();
       updateCoins();
       updateTnt();
+      updateHint(dt);
     } else if (state === "exploding") {
       explosionTimer -= dt;
       const shake = clamp(explosionTimer, 0, 1);
@@ -2081,7 +3137,9 @@
     if (messageTimer > 0) {
       messageTimer -= dt;
       if (messageTimer <= 0) {
-        statusLabel.textContent = trailer.hooked
+        statusLabel.textContent = truck.outside
+          ? "Head for the mountains. Jump off something."
+          : trailer.hooked
           ? "Smash everything!"
           : "Find the trailer and hook it up.";
       }
@@ -2089,25 +3147,56 @@
 
     drawSky();
     drawGround();
+    drawTerrainRelief();
+    drawTrench();
     drawBoundary();
+    // The world outside the fence is far bigger than the field, so nothing is
+    // handed to the renderer unless it is close enough to matter.
     for (let i = 0; i < props.length; i += 1) {
-      if (props[i].alive) {
-        drawProp(props[i]);
+      const p = props[i];
+      if (!p.alive) {
+        continue;
+      }
+      const dx = p.x - cam.x;
+      const dz = p.z - cam.z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 > 215 * 215) {
+        continue;
+      }
+      if (d2 > FAR_PROP * FAR_PROP) {
+        drawPropFar(p);
+      } else {
+        drawProp(p);
       }
     }
+    // A spinning coin is 12 polygons and reads as a yellow speck past about a
+    // hundred metres, so it is not worth drawing further out than that.
     for (let i = 0; i < coins.length; i += 1) {
-      if (coins[i].alive) {
-        drawCoin(coins[i]);
+      const c = coins[i];
+      if (c.alive && Math.abs(c.x - cam.x) < 100 && Math.abs(c.z - cam.z) < 100) {
+        drawCoin(c);
       }
     }
     for (let i = 0; i < tnt.length; i += 1) {
-      drawTnt(tnt[i]);
+      const t = tnt[i];
+      if (Math.abs(t.x - cam.x) < 150 && Math.abs(t.z - cam.z) < 150) {
+        drawTnt(t);
+      }
     }
+    drawCrate();
     drawDebris();
     drawTrailer();
     drawTruck();
     drawGiant();
     flushPolys();
+
+    // Underground it should feel underground.
+    const roofed = lidCeiling(cam.x, cam.z) !== null;
+    const gloom = clamp(-truck.y / tunnel.depth, 0, 1) * (roofed ? 0.6 : 0.26);
+    if (gloom > 0.01) {
+      ctx.fillStyle = `rgba(10, 9, 14, ${gloom})`;
+      ctx.fillRect(0, 0, W, H);
+    }
 
     if (state === "exploding") {
       const alpha = clamp(explosionTimer / 1.7, 0, 1);
@@ -2128,13 +3217,21 @@
     buildWorld();
     resetGiant();
     truck.x = 0;
+    truck.y = 0;
     truck.z = 0;
+    truck.vy = 0;
     truck.yaw = 0;
     truck.speed = 0;
     truck.steerAngle = 0;
     truck.bodyPitch = 0;
     truck.bodyRoll = 0;
+    truck.groundPitch = 0;
+    truck.groundRoll = 0;
     truck.cargoLoad = 0;
+    truck.airborne = false;
+    truck.airTime = 0;
+    truck.outside = false;
+    truck.lastGround = 0;
     cam.x = 0;
     cam.y = 5;
     cam.z = -11;
@@ -2148,6 +3245,9 @@
     respawnTimer = 0;
     state = "playing";
     explosionTimer = 0;
+    escaped = false;
+    hintTimer = 0;
+    bestAir = 0;
     input.dragging = false;
     keys.clear();
     updateScoreLabel();

@@ -28,8 +28,14 @@ up. That is also why there is no cache-busting `?v=` on the stylesheet.
   is inline), `truck-game.js` (Trailer Trouble 3000 — a software 3D renderer on
   a 2D canvas, no libraries or CDN, so it works offline on the LAN too),
   `styles.css`, and the background image.
-- Server-side config (routing, the tunnel, the cutover notes) lives in the
-  `homeserver` repo, in `NOTES.md`.
+- Trailer Trouble's fenced field is deliberately a fake edge of the world.
+  Ramming the big striped crate opens a cut that runs under the fence and comes
+  back up outside it, in open country of hills and mountains you can drive up
+  and jump off. The fence is solid from both sides, so that tunnel is the only
+  way through and the field goes on looking like the whole game until somebody
+  finds it.
+- Server-side config (routing, the Cloudflare tunnel, the cutover notes) lives
+  in the `homeserver` repo, in `NOTES.md`.
 
 It was previously on GitHub Pages; that is disabled now, and the `CNAME` file and
 the git-hook build-stamp scripts that went with it have been removed.
