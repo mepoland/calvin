@@ -16,7 +16,8 @@
     <main class="hero">
       <h1>Welcome to Calvin's Website!</h1>
       <p class="hero-intro">
-        Look for the drifting knife icon to launch Slice-N-Dice 3000.
+        Look for the drifting knife icon to launch Slice-N-Dice 3000, or the
+        drifting truck icon to launch Trailer Trouble 3000.
       </p>
       <button
         class="knife-launch"
@@ -28,6 +29,19 @@
       >
         <span class="knife-launch__blade"></span>
         <span class="knife-launch__handle"></span>
+      </button>
+
+      <button
+        class="truck-launch"
+        id="truck-launch"
+        aria-haspopup="dialog"
+        aria-controls="truck-modal"
+        aria-label="Open Trailer Trouble 3000"
+        type="button"
+      >
+        <span class="truck-launch__cab"></span>
+        <span class="truck-launch__body"></span>
+        <span class="truck-launch__wheels"></span>
       </button>
     </main>
 
@@ -60,6 +74,45 @@
         </section>
       </div>
     </div>
+    <div class="game-modal" id="truck-modal" role="dialog" aria-modal="true" aria-hidden="true">
+      <div class="game-modal__backdrop" data-close-truck></div>
+      <div class="game-modal__content">
+        <button
+          class="game-modal__close"
+          type="button"
+          aria-label="Close Trailer Trouble 3000"
+          data-close-truck
+        >
+          ×
+        </button>
+        <section class="game-section" aria-label="Trailer Trouble 3000">
+          <div class="game-header">
+            <h2>Trailer Trouble 3000</h2>
+            <p>
+              Press and drag on the field to drive: up to go, down to reverse,
+              left and right to steer. Follow the yellow arrow to the trailer and
+              drive up to it to hook on, then flatten every barrel, gate, and hay
+              bale you can find. Once you're hooked up, collect the spinning
+              gold coins -- they ride in the trailer, but the extra weight
+              slows your handling. Watch out for TNT: hit it and you blow up
+              and start over.
+            </p>
+          </div>
+          <div class="game-shell">
+            <canvas id="truck-canvas" width="880" height="520"></canvas>
+            <div class="game-stats" aria-live="polite">
+              <span id="truck-score">Smashed: 0 · Coins: 0 · 0 pts</span>
+              <span id="truck-status">Find the trailer and hook it up.</span>
+              <button class="truck-unhook" id="truck-unhook" type="button" hidden>
+                Unhook (U)
+              </button>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <script src="truck-game.js" defer></script>
     <script>
       const canvas = document.getElementById("game-canvas");
       const ctx = canvas.getContext("2d");

@@ -25,7 +25,9 @@ up. That is also why there is no cache-busting `?v=` on the stylesheet.
   viewing without the trip out to Cloudflare and back (and it still works if the
   internet is down). It is *not* a preview of unpublished work.
 - The site is plain static files: `index.html` (the Slice-N-Dice 3000 canvas game
-  is inline), `styles.css`, and the background image.
+  is inline), `truck-game.js` (Trailer Trouble 3000 — a software 3D renderer on
+  a 2D canvas, no libraries or CDN, so it works offline on the LAN too),
+  `styles.css`, and the background image.
 - Server-side config (routing, the tunnel, the cutover notes) lives in the
   `homeserver` repo, in `NOTES.md`.
 

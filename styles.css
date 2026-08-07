@@ -17,8 +17,9 @@ body {
   justify-content: center;
   text-align: center;
   padding: 2rem;
+  background-color: #e8e4dc;
   background-image: url("calvins-drawing.webp");
-  background-size: cover;
+  background-size: contain;
   background-position: center;
   background-repeat: no-repeat;
 }
@@ -159,6 +160,91 @@ body {
   box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.4);
 }
 
+#truck-canvas {
+  width: min(100%, 880px);
+  max-width: 880px;
+  height: auto;
+  border: 6px solid #1f1f1f;
+  border-radius: 16px;
+  background: #7cc5ff;
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.2);
+  touch-action: none;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+#truck-canvas:active {
+  cursor: grabbing;
+}
+
+.game-shell:has(#truck-canvas) .game-stats {
+  width: min(100%, 880px);
+  align-items: center;
+}
+
+.truck-unhook {
+  border: none;
+  border-radius: 999px;
+  padding: 0.35rem 0.9rem;
+  background: #ffd23f;
+  color: #1f1f1f;
+  font-family: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.truck-launch {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 78px;
+  height: 78px;
+  border-radius: 50%;
+  border: 3px solid #1f1f1f;
+  background: radial-gradient(circle at 30% 25%, #ffffff, #ffe08a 55%, #f2b705);
+  box-shadow: 0 16px 28px rgba(0, 0, 0, 0.2);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  transition: transform 9s ease-in-out, opacity 0.3s ease;
+  z-index: 20;
+}
+
+.truck-launch.is-hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.truck-launch__cab {
+  width: 18px;
+  height: 12px;
+  border-radius: 4px 4px 0 0;
+  background: #d63b2f;
+  margin-right: 20px;
+}
+
+.truck-launch__body {
+  width: 44px;
+  height: 14px;
+  border-radius: 3px;
+  background: #d63b2f;
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.35);
+}
+
+.truck-launch__wheels {
+  width: 44px;
+  height: 8px;
+  margin-top: 2px;
+  background:
+    radial-gradient(circle 4px at 9px 4px, #1f1f1f 98%, transparent 100%),
+    radial-gradient(circle 4px at 35px 4px, #1f1f1f 98%, transparent 100%);
+}
+
 .game-modal {
   position: fixed;
   inset: 0;
@@ -209,5 +295,30 @@ body {
 @media (max-width: 600px) {
   .game-stats {
     flex-direction: column;
+  }
+}
+
+/* On a phone the canvas is what matters, so give it the room. */
+@media (max-width: 700px), (max-height: 640px) {
+  .game-modal__content {
+    padding: 1.5rem 0.85rem 1.25rem;
+  }
+
+  #truck-modal .game-header p {
+    display: none;
+  }
+
+  #truck-modal .game-header h2 {
+    font-size: 1.4rem;
+  }
+
+  #truck-modal .game-section {
+    gap: 0.85rem;
+  }
+
+  #truck-modal .game-stats {
+    font-size: 0.8rem;
+    padding: 0.6rem 0.9rem;
+    gap: 0.5rem;
   }
 }
