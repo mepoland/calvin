@@ -104,13 +104,16 @@
               in that field is hiding a way out -- hit it hard enough and see.
             </p>
           </div>
-          <div class="game-shell">
+          <div class="game-shell" id="truck-shell">
             <canvas id="truck-canvas" width="880" height="520"></canvas>
             <div class="game-stats" aria-live="polite">
               <span id="truck-score">Smashed: 0 · Coins: 0 · 0 pts</span>
               <span id="truck-status">Find the trailer and hook it up.</span>
               <button class="truck-unhook" id="truck-unhook" type="button" hidden>
                 Unhook (U)
+              </button>
+              <button class="truck-full" id="truck-full" type="button" hidden>
+                Full screen (F)
               </button>
             </div>
           </div>

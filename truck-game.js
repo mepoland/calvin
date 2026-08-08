@@ -19,6 +19,8 @@
   const scoreLabel = document.getElementById("truck-score");
   const statusLabel = document.getElementById("truck-status");
   const unhookButton = document.getElementById("truck-unhook");
+  const fullButton = document.getElementById("truck-full");
+  const shell = document.getElementById("truck-shell");
   const closeTargets = modal.querySelectorAll("[data-close-truck]");
 
   /* ---------------------------------------------------------------- math */
@@ -81,11 +83,51 @@
 
   // Phones get a smaller render target: every polygon is filled in software,
   // so pixels are the thing that costs.
+  const WINDOWED_PIXELS = 880 * 520;
+
+  // Rolling cost of a frame, in milliseconds of actual work. Measured in the
+  // loop rather than from the frame interval, which just tells you the
+  // refresh rate.
+  let frameWork = 0;
+
+  const isFullscreen = () => document.fullscreenElement === shell;
+
+  /*
+    How many pixels full screen is allowed to rasterise.
+
+    Stretching a small canvas over a big display is nearly free, and rendering
+    a big one is not, so the honest budget depends entirely on how fast this
+    particular machine is running the game. Rather than guess, take the cost
+    of the frames just rendered at the windowed size and spend accordingly.
+    Decided once, on entry, so the resolution never oscillates mid-game.
+  */
+  const fullscreenPixels = () => {
+    let budget = WINDOWED_PIXELS;
+    if (frameWork > 0 && frameWork < 7) {
+      budget *= 3.2; // plenty of headroom
+    } else if (frameWork > 0 && frameWork < 12) {
+      budget *= 1.8;
+    }
+    // Never rasterise more than the display can actually show.
+    return Math.min(budget, window.innerWidth * window.innerHeight);
+  };
+
   const fitCanvas = () => {
-    const small = Math.min(window.innerWidth, window.innerHeight) < 700;
-    const width = small ? 560 : 880;
-    const height = small ? 340 : 520;
-    if (canvas.width !== width) {
+    let width;
+    let height;
+    if (isFullscreen()) {
+      // Keep the display's shape so the stretch to fill does not distort, and
+      // spend the budget on that shape.
+      const aspect = Math.max(0.4, window.innerWidth / Math.max(1, window.innerHeight));
+      const pixels = fullscreenPixels();
+      width = Math.round(Math.sqrt(pixels * aspect) / 2) * 2;
+      height = Math.max(2, Math.round(width / aspect / 2) * 2);
+    } else {
+      const small = Math.min(window.innerWidth, window.innerHeight) < 700;
+      width = small ? 560 : 880;
+      height = small ? 340 : 520;
+    }
+    if (canvas.width !== width || canvas.height !== height) {
       canvas.width = width;
       canvas.height = height;
     }
@@ -3125,6 +3167,7 @@
   let lastTime = 0;
 
   const frame = (now) => {
+    const workStart = performance.now();
     const dt = Math.min(0.05, (now - lastTime) / 1000) || 0.016;
     lastTime = now;
 
@@ -3225,6 +3268,11 @@
     drawStick();
     drawHud();
 
+    // Smoothed so one slow frame (a garbage collection, a tab regaining focus)
+    // cannot talk full screen into the wrong resolution.
+    const work = performance.now() - workStart;
+    frameWork = frameWork === 0 ? work : frameWork * 0.9 + work * 0.1;
+
     frameId = requestAnimationFrame(frame);
   };
 
@@ -3293,6 +3341,11 @@
       return;
     }
     running = false;
+    if (isFullscreen()) {
+      // Leaving the game while still full screen would strand the browser
+      // showing a hidden modal.
+      leaveFullscreen();
+    }
     modal.setAttribute("aria-hidden", "true");
     modal.classList.remove("is-visible");
     launchButton.classList.remove("is-hidden");
@@ -3303,6 +3356,60 @@
       frameId = null;
     }
   };
+
+  /* ---------------------------------------------------------- full screen */
+
+  // iOS Safari has no Fullscreen API for ordinary elements, and a stale cached
+  // page would have no button, so every part of this is optional.
+  const supportsFullscreen = !!(
+    shell &&
+    fullButton &&
+    shell.requestFullscreen &&
+    document.exitFullscreen
+  );
+
+  const leaveFullscreen = () => {
+    const done = document.exitFullscreen();
+    if (done && done.catch) {
+      done.catch(() => {});
+    }
+  };
+
+  const syncFullButton = () => {
+    if (!supportsFullscreen) {
+      return;
+    }
+    fullButton.textContent = isFullscreen() ? "Exit full screen (F)" : "Full screen (F)";
+  };
+
+  const toggleFullscreen = () => {
+    if (!supportsFullscreen || !running) {
+      return;
+    }
+    if (isFullscreen()) {
+      leaveFullscreen();
+    } else {
+      // Safari and friends reject this unless it came from a real gesture, so
+      // failing quietly and staying windowed is the right answer.
+      const req = shell.requestFullscreen();
+      if (req && req.catch) {
+        req.catch(() => {});
+      }
+    }
+  };
+
+  if (supportsFullscreen) {
+    fullButton.hidden = false;
+    fullButton.addEventListener("click", toggleFullscreen);
+    // Fires for the button, the F key, and the browser's own Escape, so the
+    // canvas is resized by whichever route was taken.
+    document.addEventListener("fullscreenchange", () => {
+      if (running) {
+        fitCanvas();
+      }
+      syncFullButton();
+    });
+  }
 
   // Move and release listen on the window so a drag that wanders off the
   // canvas keeps steering, and letting go anywhere always stops the truck.
@@ -3321,11 +3428,19 @@
       return;
     }
     if (event.key === "Escape") {
-      closeGame();
+      // Full screen already swallows Escape to get out of it. Closing the game
+      // as well would take two things away for one keypress.
+      if (!isFullscreen()) {
+        closeGame();
+      }
       return;
     }
     if (event.key === "u" || event.key === "U") {
       dropTrailer();
+      return;
+    }
+    if (event.key === "f" || event.key === "F") {
+      toggleFullscreen();
       return;
     }
     const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;

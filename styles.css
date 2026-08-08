@@ -196,6 +196,56 @@ body {
   cursor: pointer;
 }
 
+.truck-full {
+  border: none;
+  border-radius: 999px;
+  padding: 0.35rem 0.9rem;
+  background: #6fc3ff;
+  color: #10222f;
+  font-family: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+/*
+  Full screen. The canvas is stretched edge to edge rather than re-rendered at
+  the display's real pixel count -- every polygon here is filled in software,
+  so resolution is the one thing that has to stay on a budget. The game picks
+  that budget itself; see fitCanvas.
+*/
+#truck-shell:fullscreen {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  gap: 0;
+  padding: 0;
+  background: #0b0d10;
+}
+
+#truck-shell:fullscreen #truck-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* Score and status ride over the picture instead of stealing a strip of it. */
+#truck-shell:fullscreen .game-stats {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: auto;
+  border-radius: 0;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  padding: 0.5rem 1rem;
+}
+
 .truck-launch {
   position: fixed;
   top: 0;
