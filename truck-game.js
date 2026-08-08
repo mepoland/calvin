@@ -1423,26 +1423,27 @@
 
   /*
     A 200-foot six-year-old stomping around the field, barefoot and filthy.
-    World units are roughly metres (the truck is about 5 long), so 200 feet is
-    ~61 units from heel to hair. He is built in a local frame -- x across, y
-    up, z forward -- and rotated onto the field by gp(), so every part swings
-    together. The whole thing is one entity, so the detail is affordable.
+    World units are roughly metres (the truck is about 5 long), so he stands
+    about 63 of them heel to crown, and a little more where the hair sticks
+    up. He is built in a local frame -- x across, y up, z forward -- and
+    rotated onto the field by gp(), so every part swings together. It is all
+    one entity, which is why this much detail is affordable.
   */
   const G_HIP_X = 3.6;
-  const G_HIP_Y = 28.5;
+  const G_HIP_Y = 27.0;
+  // Thigh + shin must out-reach the hip height at full stride, or the trailing
+  // foot gets pulled off the ground by the reach clamp and the giant moonwalks.
   const G_THIGH = 13;
   const G_SHIN = 13;
   const G_ANKLE = 2.6;
-  const G_STRIDE = 12; // metres between footfalls, half in front, half behind
+  const G_STRIDE = 11; // metres between footfalls, half in front, half behind
   const G_LIFT = 7;
   const G_SPEED = 8.5; // slower than the truck, so he is dodgeable
   const G_TURN = 0.55;
-  const G_TORSO_Y0 = 29.5;
-  const G_TORSO_Y1 = 47.5;
   const G_TORSO_HX = 6.3;
   const G_TORSO_HZ = 3.9;
-  const G_SHOULDER_X = 6.8;
-  const G_SHOULDER_Y = 46.0;
+  const G_SHOULDER_X = 7.9;
+  const G_SHOULDER_Y = 45.4;
   const G_UPPER = 11;
   const G_FORE = 9.5;
   // A six-year-old's head is about a sixth of him, which is most of why he
@@ -1742,6 +1743,13 @@
           giant.speed = lerp(giant.speed, G_SPEED, 1 - Math.pow(0.25, dt));
           giant.x += Math.sin(giant.yaw) * giant.speed * dt;
           giant.z += Math.cos(giant.yaw) * giant.speed * dt;
+          // He turns slowly enough to swing wide of a target near the edge,
+          // so keep him inside the fence the same way the truck is kept in.
+          const out = Math.hypot(giant.x, giant.z);
+          if (out > ARENA - 6) {
+            giant.x = (giant.x / out) * (ARENA - 6);
+            giant.z = (giant.z / out) * (ARENA - 6);
+          }
         }
       }
       // Phase follows distance walked: a stride covers half the gait cycle.
@@ -1826,8 +1834,14 @@
     }
     const dist = Math.hypot(giant.x - cam.x, giant.z - cam.z);
     const detail = dist < 115;
-    const zF = G_TORSO_HZ + 0.75; // decal plane just off the front of the shirt
-    const zB = -(G_TORSO_HZ + 0.75);
+    /*
+      Decals sit a clear margin off the cloth. Depth sorting is per polygon and
+      by average depth, so a decal flush against its surface can lose the tie
+      and vanish inside the body. A metre of clearance on a sixty-metre boy is
+      invisible and settles every one of those ties.
+    */
+    const zF = G_TORSO_HZ + 1.3;
+    const zB = -(G_TORSO_HZ + 1.3);
     const zH = G_HEAD_HZ + 0.12; // decal plane on the face
 
     // Shadow pools: the only warning that a foot is on its way down.
@@ -1852,7 +1866,15 @@
     for (let i = 0; i < 2; i += 1) {
       const leg = legs[i];
       const lx = leg.side * G_HIP_X;
-      addLimb(lx, G_HIP_Y, 0, leg.kneeY, leg.kneeZ, 2.7, 2.7, SKIN);
+      /*
+        The bare thigh starts at the hem, not at the hip. Faces are sorted by
+        average depth, and once the camera cranes up, height counts toward
+        depth -- a thigh drawn full length wins that comparison against the
+        shorts and draws straight through them. Not overlapping settles it.
+      */
+      const hemY = lerp(G_HIP_Y, leg.kneeY, 0.42);
+      const hemZ = lerp(0, leg.kneeZ, 0.42);
+      addLimb(lx, hemY, hemZ, leg.kneeY, leg.kneeZ, 2.7, 2.7, SKIN);
       addLimb(lx, leg.kneeY, leg.kneeZ, leg.ankleY, leg.az, 2.1, 2.1, SKIN);
 
       const footPitch = clamp(leg.lift * 0.05, 0, 0.34);
@@ -1900,26 +1922,21 @@
         const x0 = lx - 3.2 + k * 2.1;
         const x1 = x0 + 2.1;
         const dip = 1.0 + ((k + i) % 3) * 1.1;
-        gTri(x0, cy + 0.3, x1, cy + 0.3, (x0 + x1) / 2, cy - dip, cz + 3.4, SHORTS);
-        gTri(x0, cy + 0.3, x1, cy + 0.3, (x0 + x1) / 2, cy - dip, cz - 3.4, SHORTS_DARK);
+        gTri(x0, cy + 0.3, x1, cy + 0.3, (x0 + x1) / 2, cy - dip, cz + 4.8, SHORTS);
+        gTri(x0, cy + 0.3, x1, cy + 0.3, (x0 + x1) / 2, cy - dip, cz - 4.8, SHORTS_DARK);
       }
     }
 
     /* ----- torso and the pale green tank top */
-    const torsoW = gp(0, (G_TORSO_Y0 + G_TORSO_Y1) / 2, 0);
-    addBox(
-      torsoW[0],
-      torsoW[1],
-      torsoW[2],
-      G_TORSO_HX,
-      (G_TORSO_Y1 - G_TORSO_Y0) / 2,
-      G_TORSO_HZ,
-      SKIN,
-      giant.yaw
-    );
+    // Only the skin the shirt does not cover gets drawn, for the same
+    // depth-sorting reason as the thighs.
+    const belly = gp(0, 31.0, 0);
+    addBox(belly[0], belly[1], belly[2], G_TORSO_HX, 1.6, G_TORSO_HZ, SKIN, giant.yaw);
+    const chest = gp(0, 46.6, 0);
+    addBox(chest[0], chest[1], chest[2], G_TORSO_HX, 1.1, G_TORSO_HZ, SKIN, giant.yaw);
 
     const shirtY0 = 31.8;
-    const shirtY1 = 45.4;
+    const shirtY1 = 46.6;
     const shirtW = gp(0, (shirtY0 + shirtY1) / 2, 0);
     addBox(
       shirtW[0],
@@ -1932,17 +1949,18 @@
       giant.yaw
     );
     for (const side of [-1, 1]) {
-      const strap = gp(side * 4.4, 46.4, 0);
-      addBox(strap[0], strap[1], strap[2], 1.4, 1.9, 1.7, SHIRT_DARK, giant.yaw);
+      // Deep enough to wrap the shoulder instead of hiding inside the chest.
+      const strap = gp(side * 4.2, 47.0, 0);
+      addBox(strap[0], strap[1], strap[2], 1.3, 1.6, G_TORSO_HZ + 0.6, SHIRT_DARK, giant.yaw);
     }
-    // Ragged hem.
+    // Ragged hem, hanging over the waistband.
     for (let i = 0; i < 6; i += 1) {
-      const w = (G_TORSO_HX + 0.5) * 2 / 6;
+      const w = ((G_TORSO_HX + 0.5) * 2) / 6;
       const x0 = -(G_TORSO_HX + 0.5) + i * w;
       const x1 = x0 + w;
       const dip = 1.1 + ((i * 5) % 3) * 1.0;
-      gTri(x0, shirtY0 + 0.3, x1, shirtY0 + 0.3, (x0 + x1) / 2, shirtY0 - dip, zF - 0.35, SHIRT);
-      gTri(x0, shirtY0 + 0.3, x1, shirtY0 + 0.3, (x0 + x1) / 2, shirtY0 - dip, zB + 0.35, SHIRT_DARK);
+      gTri(x0, shirtY0 + 0.3, x1, shirtY0 + 0.3, (x0 + x1) / 2, shirtY0 - dip, zF - 0.15, SHIRT);
+      gTri(x0, shirtY0 + 0.3, x1, shirtY0 + 0.3, (x0 + x1) / 2, shirtY0 - dip, zB + 0.15, SHIRT_DARK);
     }
 
     if (detail) {
@@ -1955,10 +1973,10 @@
       addSteg(3.0, 34.8, 0.7, zB, STEG);
       // A tear in the shirt, and the dirt of a bath long overdue. Smudges are
       // ragged triangles -- a rectangle of dirt reads as a floating box.
-      gTri(-5.6, 38.6, -3.6, 37.2, -5.8, 34.8, zF - 0.3, SKIN_DARK);
-      gTri(-1.4, 32.6, 2.4, 33.8, 0.6, 35.6, zF - 0.3, GRIME);
-      gTri(-1.4, 32.6, 2.4, 33.8, 1.8, 31.9, zF - 0.3, GRIME);
-      gTri(3.8, 38.2, 5.9, 39.0, 4.2, 40.8, zF - 0.3, GRIME);
+      gTri(-5.6, 38.6, -3.6, 37.2, -5.8, 34.8, zF - 0.1, SKIN_DARK);
+      gTri(-1.4, 32.6, 2.4, 33.8, 0.6, 35.6, zF - 0.1, GRIME);
+      gTri(-1.4, 32.6, 2.4, 33.8, 1.8, 31.9, zF - 0.1, GRIME);
+      gTri(3.8, 38.2, 5.9, 39.0, 4.2, 40.8, zF - 0.1, GRIME);
     }
 
     /* ----- arms */
@@ -1976,7 +1994,7 @@
       const wristY = elbowY - Math.cos(bend) * G_FORE;
       const wristZ = elbowZ + Math.sin(bend) * G_FORE;
       const shoulder = gp(lx, G_SHOULDER_Y, 0);
-      addBox(shoulder[0], shoulder[1], shoulder[2], 2.4, 2.2, 2.4, SKIN, giant.yaw);
+      addBox(shoulder[0], shoulder[1], shoulder[2], 2.3, 2.2, 2.3, SKIN, giant.yaw);
       addLimb(lx, G_SHOULDER_Y, 0, elbowY, elbowZ, 2.1, 2.1, SKIN);
       addLimb(lx, elbowY, elbowZ, wristY, wristZ, 1.8, 1.8, SKIN);
       const hand = gp(lx, wristY - 1.6, wristZ + 0.4);
@@ -2865,7 +2883,7 @@
     if (gAngle < 1.05) {
       // Exactly enough tilt to bring his hair to the top edge of the frame,
       // capped so the truck never slides off the bottom.
-      const headAngle = Math.atan2(G_HEAD_Y + G_HEAD_HY + 2 - cam.y, Math.max(20, gdist));
+      const headAngle = Math.atan2(G_HEAD_Y + G_HEAD_HY + 5 - cam.y, Math.max(20, gdist));
       const needed = cam.pitch + headAngle - FOV / 2;
       craneTarget =
         clamp(needed, 0, 0.44) *
