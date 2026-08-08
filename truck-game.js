@@ -3344,5 +3344,4 @@
     }
   });
   driftLaunchButton();
-  window.__dbg = { truck, giant, cam, trailer, resetGiant, polys: () => polys.length };
 })();
